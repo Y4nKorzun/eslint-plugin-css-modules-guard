@@ -42,7 +42,12 @@ import type { CssModulesOptions } from '../src/core/types.js';
 const repositoryRoot = resolve(process.cwd());
 const packageManifest = JSON.parse(
   readFileSync(join(repositoryRoot, 'package.json'), 'utf8'),
-) as { bin: Record<string, string> };
+) as {
+  bin: Record<string, string>;
+  bugs: { url: string };
+  homepage: string;
+  repository: { type: string; url: string };
+};
 const fixture = (...segments: string[]): string => join(repositoryRoot, 'test', 'fixtures', ...segments);
 
 async function lint(
@@ -117,6 +122,15 @@ test('recommended config exposes the plugin rule', () => {
 
 test('published CLI metadata uses an npm-valid bin path', () => {
   assert.equal(packageManifest.bin['css-modules-lint'], 'dist/src/cli.js');
+});
+
+test('published package links point to the source repository', () => {
+  assert.deepEqual(packageManifest.repository, {
+    type: 'git',
+    url: 'git+https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard.git',
+  });
+  assert.equal(packageManifest.bugs.url, 'https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/issues');
+  assert.equal(packageManifest.homepage, 'https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard#readme');
 });
 
 test('reports static unknown properties with a correction', async () => {
