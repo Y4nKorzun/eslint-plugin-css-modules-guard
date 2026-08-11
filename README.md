@@ -28,7 +28,6 @@ The rule checks default imports ending in `.module.css`, `.module.scss`, and `.m
   rules: {
     'css-modules/no-unknown-class': ['error', {
       localsConvention: 'camelCase',
-      aliases: { '@': 'src' },
       sassLoadPaths: ['src/styles'],
       suggestThreshold: 2,
       cache: true,
@@ -37,7 +36,7 @@ The rule checks default imports ending in `.module.css`, `.module.scss`, and `.m
 }
 ```
 
-`aliases` supplement `compilerOptions.paths` from the nearest `tsconfig.json`. `camelCase` and `dashes` expose both the original and camel-cased property name; `camelCaseOnly` exposes only the latter.
+The plugin reads `compilerOptions.paths` automatically from the nearest local `tsconfig.json`, including safe local project references. `camelCase` and `dashes` expose both the original and camel-cased property name; `camelCaseOnly` exposes only the latter.
 
 ## Unused classes CLI
 
