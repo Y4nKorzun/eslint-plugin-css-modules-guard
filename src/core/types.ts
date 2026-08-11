@@ -22,8 +22,12 @@ export interface ExtractorOptions {
 export interface ExtractionResult {
   /** Every property that can be read from the module object. */
   classes: ReadonlySet<string>;
-  /** Properties defined by this stylesheet, excluding composed dependencies. */
+  /** CSS class selectors defined by this stylesheet, excluding composed dependencies. */
   localClasses: ReadonlySet<string>;
+  /** Direct local CSS class dependencies created by `composes`. */
+  localCompositions?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Sass `@extend` prevents a complete unused-class analysis. */
+  hasSassExtend?: boolean;
 }
 
 export interface ResolvedStylesheet {

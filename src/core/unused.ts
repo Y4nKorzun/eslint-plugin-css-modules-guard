@@ -3,7 +3,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node
 
 import ts from 'typescript';
 
-import { extractClasses } from './extractor.js';
+import { extractClasses, usedLocalClasses } from './extractor.js';
 import { normalizeOptions } from './options.js';
 import { isCssModuleSpecifier, isInside, resolveStylesheet } from './resolver.js';
 import type { CssModulesOptions, ExtractorOptions } from './types.js';
@@ -259,9 +259,13 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResul
     if (usage?.all) {
       continue;
     }
+    if (extracted.hasSassExtend) {
+      return { incomplete: true, unused: [] };
+    }
 
+    const usedClasses = usedLocalClasses(extracted, usage?.classes ?? new Set(), options.localsConvention);
     for (const className of extracted.localClasses) {
-      if (!usage?.classes.has(className)) {
+      if (!usedClasses.has(className)) {
         unused.push({ stylesheet, className });
       }
     }

@@ -19,6 +19,7 @@ interface ParsedStylesheet {
   exportedValues: string[];
   rawClasses: string[];
   globalClasses: string[];
+  hasSassExtend: boolean;
   compositions: Map<string, Composition[]>;
 }
 
@@ -35,6 +36,7 @@ interface CacheEntry {
 interface CompiledStylesheet {
   css: string;
   dependencies: Map<string, string>;
+  hasSassExtend: boolean;
 }
 
 const SAFE_SASS_URL_SCHEME = 'css-modules-real:';
@@ -316,7 +318,7 @@ export function compileStylesheet(
   try {
     if (!/\.(?:scss|sass)$/i.test(filePath)) {
       const dependencies = fingerprintDependencies([filePath], options.rootDir);
-      return dependencies ? { css: readFileSync(filePath, 'utf8'), dependencies } : undefined;
+      return dependencies ? { css: readFileSync(filePath, 'utf8'), dependencies, hasSassExtend: false } : undefined;
     }
 
     const dependencies = new Set([filePath]);
@@ -328,8 +330,11 @@ export function compileStylesheet(
       logger: sass.Logger.silent,
     });
 
+    const hasSassExtend = [...dependencies].some(
+      (dependency) => /\.(?:scss|sass)$/i.test(dependency) && /@extend\b/.test(readFileSync(dependency, 'utf8')),
+    );
     const fingerprints = fingerprintDependencies([...dependencies], options.rootDir);
-    return fingerprints ? { css: result.css, dependencies: fingerprints } : undefined;
+    return fingerprints ? { css: result.css, dependencies: fingerprints, hasSassExtend } : undefined;
   } catch {
     return undefined;
   }
@@ -372,7 +377,11 @@ function parseComposition(value: string): Composition | undefined {
   return { names };
 }
 
-function parseStylesheet(css: string, filePath: string): ParsedStylesheet | undefined {
+function parseStylesheet(
+  css: string,
+  filePath: string,
+  hasSassExtend: boolean,
+): ParsedStylesheet | undefined {
   try {
     const root = postcss.parse(css, { from: filePath });
     const rawClasses = new Set<string>();
@@ -419,6 +428,7 @@ function parseStylesheet(css: string, filePath: string): ParsedStylesheet | unde
       rawClasses: [...rawClasses],
       globalClasses: [...globalClasses],
       exportedValues: [...exportedValues],
+      hasSassExtend,
       compositions,
     };
   } catch {
@@ -464,7 +474,7 @@ function loadParsedStylesheet(
     return undefined;
   }
 
-  const parsed = parseStylesheet(compiled.css, filePath);
+  const parsed = parseStylesheet(compiled.css, filePath, compiled.hasSassExtend);
   if (!parsed) {
     return undefined;
   }
@@ -514,7 +524,12 @@ function extractCssModule(
 ): ExtractionDetails | undefined {
   if (ancestors.has(filePath)) {
     return {
-      result: { classes: new Set(), localClasses: new Set() },
+      result: {
+        classes: new Set(),
+        localClasses: new Set(),
+        localCompositions: new Map(),
+        hasSassExtend: false,
+      },
       exports: new Map(),
     };
   }
@@ -524,9 +539,23 @@ function extractCssModule(
     return undefined;
   }
 
-  const localClasses = new Set<string>();
+  const localClasses = new Set(parsed.rawClasses);
+  const localCompositions = new Map<string, Set<string>>();
   for (const className of parsed.rawClasses) {
-    addClassNames(localClasses, className, options.localsConvention);
+    const dependencies = new Set<string>();
+    for (const composition of parsed.compositions.get(className) ?? []) {
+      if (composition.source) {
+        continue;
+      }
+      for (const composedClass of composition.names) {
+        if (localClasses.has(composedClass)) {
+          dependencies.add(composedClass);
+        }
+      }
+    }
+    if (dependencies.size > 0) {
+      localCompositions.set(className, dependencies);
+    }
   }
 
   const nextAncestors = new Set(ancestors).add(filePath);
@@ -555,7 +584,7 @@ function extractCssModule(
 
       if (!composition.source) {
         for (const composedClass of composition.names) {
-          if (parsed.rawClasses.includes(composedClass)) {
+          if (localClasses.has(composedClass)) {
             for (const propertyName of resolveExport(composedClass)) {
               exported.add(propertyName);
             }
@@ -600,7 +629,12 @@ function extractCssModule(
   }
 
   return {
-    result: { classes, localClasses },
+    result: {
+      classes,
+      localClasses,
+      localCompositions,
+      hasSassExtend: parsed.hasSassExtend,
+    },
     exports: exportedClasses,
   };
 }
@@ -611,6 +645,31 @@ export function extractClasses(
 ): ExtractionResult | undefined {
   const safeFile = isSafeProjectFile(filePath, options.rootDir);
   return safeFile ? extractCssModule(safeFile, options, new Set())?.result : undefined;
+}
+
+export function usedLocalClasses(
+  extracted: ExtractionResult,
+  usedProperties: ReadonlySet<string>,
+  convention: LocalsConvention,
+): Set<string> {
+  const used = new Set<string>();
+  const pending = [...extracted.localClasses].filter((className) =>
+    [...propertyNamesForClass(className, convention)]
+      .some((propertyName) => usedProperties.has(propertyName)),
+  );
+
+  while (pending.length > 0) {
+    const className = pending.pop()!;
+    if (used.has(className)) {
+      continue;
+    }
+    used.add(className);
+    for (const dependency of extracted.localCompositions?.get(className) ?? []) {
+      pending.push(dependency);
+    }
+  }
+
+  return used;
 }
 
 export function clearExtractionCache(): void {
