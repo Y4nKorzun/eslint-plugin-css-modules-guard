@@ -22,7 +22,7 @@ interface CssModulesPlugin {
 
 const plugin: CssModulesPlugin = {
   meta: {
-    name: 'eslint-plugin-css-modules-real',
+    name: 'eslint-plugin-css-modules-guard',
     version: '0.4.0',
   },
   rules: {

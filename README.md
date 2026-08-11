@@ -1,14 +1,14 @@
-# eslint-plugin-css-modules-real
+# eslint-plugin-css-modules-guard
 
 An ESLint 9 and 10 flat-config plugin that reads local CSS Modules at lint time and reports unknown `styles.foo` properties. SCSS and Sass are compiled with Dart Sass first, so nesting, mixins, `@extend`, and static interpolation resolve to their real selectors.
 
 ```sh
-npm install --save-dev eslint-plugin-css-modules-real eslint
+npm install --save-dev eslint-plugin-css-modules-guard eslint
 ```
 
 ```js
 // eslint.config.js
-import cssModules from 'eslint-plugin-css-modules-real';
+import cssModules from 'eslint-plugin-css-modules-guard';
 
 export default [cssModules.configs.recommended];
 ```

@@ -15,7 +15,7 @@ interface ImportedModule {
 }
 
 const createRule = ESLintUtils.RuleCreator(
-  (name) => `https://www.npmjs.com/package/eslint-plugin-css-modules-real#${name}`,
+  (name) => `https://www.npmjs.com/package/eslint-plugin-css-modules-guard#${name}`,
 );
 
 function staticPropertyName(node: TSESTree.MemberExpression): string | undefined {

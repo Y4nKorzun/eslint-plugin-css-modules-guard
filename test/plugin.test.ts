@@ -106,6 +106,7 @@ function writeProjectFile(rootDir: string, fileName: string, contents: string): 
 }
 
 test('recommended config exposes the plugin rule', () => {
+  assert.equal(plugin.meta.name, 'eslint-plugin-css-modules-guard');
   assert.equal(plugin.configs.recommended.plugins['css-modules'], plugin);
   assert.equal(plugin.configs.recommended.rules['css-modules/no-unknown-class'], 'error');
 });
