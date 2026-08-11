@@ -82,6 +82,38 @@ function localExtendedConfig(
   return isSafeProjectFile(candidate, rootDir);
 }
 
+function localReferenceConfig(
+  value: unknown,
+  configPath: string,
+  rootDir: string,
+): string | undefined {
+  if (typeof value !== 'string' || (!value.startsWith('.') && !isAbsolute(value))) {
+    return undefined;
+  }
+
+  const reference = resolve(dirname(configPath), value);
+  const candidate = value.endsWith('.json') ? reference : join(reference, 'tsconfig.json');
+  return isSafeProjectFile(candidate, rootDir);
+}
+
+function localReferencedConfigs(
+  value: unknown,
+  configPath: string,
+  rootDir: string,
+): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((reference) => {
+    const referencePath = typeof reference === 'object' && reference !== null
+      ? (reference as { path?: unknown }).path
+      : undefined;
+    const localConfig = localReferenceConfig(referencePath, configPath, rootDir);
+    return localConfig ? [localConfig] : [];
+  });
+}
+
 function readTsconfigAliases(
   configPath: string,
   rootDir: string,
@@ -97,6 +129,7 @@ function readTsconfigAliases(
     const config = parsed.config as {
       extends?: unknown;
       compilerOptions?: { baseUrl?: unknown; paths?: unknown };
+      references?: unknown;
     };
 
     const nextVisited = new Set(visited).add(safeConfig);
@@ -104,14 +137,18 @@ function readTsconfigAliases(
     const parent = parentPath
       ? readTsconfigAliases(parentPath, rootDir, nextVisited)
       : undefined;
+    const referencedMappings = localReferencedConfigs(config.references, safeConfig, rootDir).flatMap(
+      (referencePath) => readTsconfigAliases(referencePath, rootDir, nextVisited)?.mappings ?? [],
+    );
     const ownBaseUrl = config.compilerOptions?.baseUrl;
     const baseDir = typeof ownBaseUrl === 'string'
       ? resolve(dirname(safeConfig), ownBaseUrl)
       : parent?.baseDir ?? dirname(safeConfig);
     const rawPaths = config.compilerOptions?.paths;
+    const inheritedMappings = [...(parent?.mappings ?? []), ...referencedMappings];
 
     if (!rawPaths || typeof rawPaths !== 'object' || Array.isArray(rawPaths)) {
-      return { baseDir, mappings: parent?.mappings ?? [] };
+      return { baseDir, mappings: inheritedMappings };
     }
 
     const mappings = Object.entries(rawPaths).flatMap(([key, targets]) =>
@@ -119,7 +156,7 @@ function readTsconfigAliases(
         ? targets.flatMap((target) => typeof target === 'string' ? [{ key, target, baseDir }] : [])
         : [],
     );
-    return { baseDir, mappings };
+    return { baseDir, mappings: [...inheritedMappings, ...mappings] };
   } catch {
     return undefined;
   }

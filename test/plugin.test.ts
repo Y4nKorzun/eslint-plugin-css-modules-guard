@@ -354,6 +354,59 @@ test('reads local tsconfig aliases defensively', () => {
   });
 });
 
+test('resolves relative stylesheets and aliases from local project references', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  const outsideDir = mkdtempSync(join(tmpdir(), 'css-modules-real-outside-'));
+
+  try {
+    const importer = writeProjectFile(rootDir, 'src/View.js', 'export {};');
+    const relativeStylesheet = writeProjectFile(rootDir, 'src/relative.module.css', '.relative {}');
+    const aliasedStylesheet = writeProjectFile(rootDir, 'src/aliased.module.css', '.aliased {}');
+    const outsideConfig = writeProjectFile(outsideDir, 'tsconfig.json', JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '@outside/*': ['*'] } },
+    }));
+    writeProjectFile(rootDir, 'config/tsconfig.app.json', JSON.stringify({
+      compilerOptions: { baseUrl: '..', paths: { '@/*': ['src/*'] } },
+    }));
+    writeProjectFile(rootDir, 'config-directory/tsconfig.json', JSON.stringify({
+      compilerOptions: { baseUrl: '..', paths: { '@directory/*': ['src/*'] } },
+    }));
+    writeProjectFile(rootDir, 'config/invalid.json', '{');
+    writeProjectFile(rootDir, 'tsconfig.json', JSON.stringify({
+      references: [
+        { path: './config/tsconfig.app.json' },
+        { path: './config-directory' },
+        { path: './config/invalid.json' },
+        { path: './tsconfig.json' },
+        { path: outsideConfig },
+        { path: 'external-package' },
+        null,
+        [],
+        'not-an-object',
+      ],
+    }));
+
+    const options = normalizeOptions(undefined, rootDir);
+    assert.equal(resolveStylesheet(importer, './relative.module.css', options)?.path, relativeStylesheet);
+    assert.equal(resolveStylesheet(importer, '@/aliased.module.css', options)?.path, aliasedStylesheet);
+    assert.equal(resolveStylesheet(importer, '@directory/aliased.module.css', options)?.path, aliasedStylesheet);
+    assert.equal(resolveStylesheet(importer, '@outside/tsconfig.json', options), undefined);
+
+    const messages = await lint([
+      "import relativeStyles from './relative.module.css';",
+      "import aliasStyles from '@/aliased.module.css';",
+      'relativeStyles.missing;',
+      'aliasStyles.missing;',
+    ].join('\n'), importer, {}, rootDir);
+    assert.equal(messages.length, 2);
+    assert.deepEqual(messages.map((message) => message.messageId), ['unknownClass', 'unknownClass']);
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+    rmSync(outsideDir, { force: true, recursive: true });
+  }
+});
+
 test('stops tsconfig discovery at the filesystem root', () => {
   const options = normalizeOptions(undefined, '/');
   assert.equal(resolveStylesheet('/css-modules-real/Component.ts', '@missing.module.css', options), undefined);
