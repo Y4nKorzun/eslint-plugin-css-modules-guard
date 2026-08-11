@@ -524,10 +524,7 @@ function extractCssModule(
     return undefined;
   }
 
-  const localClasses = new Set<string>();
-  for (const className of parsed.rawClasses) {
-    addClassNames(localClasses, className, options.localsConvention);
-  }
+  const localClasses = new Set(parsed.rawClasses);
 
   const nextAncestors = new Set(ancestors).add(filePath);
   const exportedClasses = new Map<string, Set<string>>();

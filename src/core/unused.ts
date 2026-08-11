@@ -3,7 +3,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node
 
 import ts from 'typescript';
 
-import { extractClasses } from './extractor.js';
+import { extractClasses, propertyNamesForClass } from './extractor.js';
 import { normalizeOptions } from './options.js';
 import { isCssModuleSpecifier, isInside, resolveStylesheet } from './resolver.js';
 import type { CssModulesOptions, ExtractorOptions } from './types.js';
@@ -261,7 +261,9 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResul
     }
 
     for (const className of extracted.localClasses) {
-      if (!usage?.classes.has(className)) {
+      const isUsed = [...propertyNamesForClass(className, options.localsConvention)]
+        .some((propertyName) => usage?.classes.has(propertyName));
+      if (!isUsed) {
         unused.push({ stylesheet, className });
       }
     }

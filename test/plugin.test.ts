@@ -38,10 +38,11 @@ import {
 import { findUnusedClasses, relativeUnusedClasses } from '../src/core/unused.js';
 import plugin from '../src/index.js';
 import { noUnknownClass } from '../src/rules/no-unknown-class.js';
+import { noUnusedClass } from '../src/rules/no-unused-class.js';
 import { unresolvableStylesheet } from '../src/rules/unresolvable-stylesheet.js';
 import type { CssModulesOptions } from '../src/core/types.js';
 
-type TestRule = 'no-unknown-class' | 'unresolvable-stylesheet';
+type TestRule = 'no-unknown-class' | 'no-unused-class' | 'unresolvable-stylesheet';
 
 const repositoryRoot = resolve(process.cwd());
 const packageManifest = JSON.parse(
@@ -76,6 +77,7 @@ async function lint(
         'css-modules': {
           rules: {
             'no-unknown-class': noUnknownClass,
+            'no-unused-class': noUnusedClass,
             'unresolvable-stylesheet': unresolvableStylesheet,
           },
         },
@@ -125,9 +127,14 @@ function writeProjectFile(rootDir: string, fileName: string, contents: string): 
 test('recommended config exposes the plugin rule', () => {
   assert.equal(plugin.meta.name, 'eslint-plugin-css-modules-guard');
   assert.equal(plugin.meta.version, packageManifest.version);
+  assert.equal(plugin.rules['no-unused-class'], noUnusedClass);
   assert.equal(plugin.configs.recommended.plugins['css-modules'], plugin);
   assert.equal(plugin.configs.recommended.rules['css-modules/no-unknown-class'], 'error');
   assert.equal(plugin.configs.recommended.rules['css-modules/unresolvable-stylesheet'], 'error');
+  assert.equal(
+    Object.hasOwn(plugin.configs.recommended.rules, 'css-modules/no-unused-class'),
+    false,
+  );
 });
 
 test('published CLI metadata uses an npm-valid bin path', () => {
@@ -148,6 +155,10 @@ test('published package links point to the source repository', () => {
   assert.equal(
     noUnknownClass.meta.docs?.url,
     'https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modulesno-unknown-class',
+  );
+  assert.equal(
+    noUnusedClass.meta.docs?.url,
+    'https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modulesno-unused-class',
   );
   assert.equal(
     unresolvableStylesheet.meta.docs?.url,
@@ -196,6 +207,182 @@ test('honors css-loader locals conventions', async () => {
 
   assert.equal(messages.length, 1);
   assert.match(messages[0]!.message, /kebab-case/);
+});
+
+test('reports CSS Module classes unused by the current source file', async () => {
+  const messages = await lint(
+    [
+      "import styles from './basic.module.css';",
+      'const { root: rootClass } = styles;',
+      'styles?.kebabCase;',
+    ].join('\n'),
+    fixture('Component.js'),
+    { localsConvention: 'camelCaseOnly' },
+    repositoryRoot,
+    'no-unused-class',
+  );
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]!.ruleId, 'css-modules/no-unused-class');
+  assert.match(messages[0]!.message, /Unused CSS Module class "primary"/);
+});
+
+test('handles static and uncertain no-unused-class access safely', async () => {
+  const staticMessages = await lint(
+    [
+      "import styles from './basic.module.css';",
+      "styles['root'];",
+      'styles[`primary`];',
+    ].join('\n'),
+    fixture('Component.js'),
+    {
+      aliases: {},
+      cache: false,
+      cacheLimit: 1,
+      sassLoadPaths: [],
+      suggestThreshold: 0,
+    },
+    repositoryRoot,
+    'no-unused-class',
+  );
+  assert.equal(staticMessages.length, 1);
+  assert.match(staticMessages[0]!.message, /Unused CSS Module class "kebab-case"/);
+
+  const dynamicMessages = await lint(
+    [
+      "import styles from './basic.module.css';",
+      'const key = readKey();',
+      'styles[key];',
+    ].join('\n'),
+    fixture('Component.js'),
+    {},
+    repositoryRoot,
+    'no-unused-class',
+  );
+  assert.deepEqual(dynamicMessages, []);
+
+  const destructuredMessages = await lint(
+    "import styles from './basic.module.css';\nconst { ...rest } = styles;",
+    fixture('Component.js'),
+    {},
+    repositoryRoot,
+    'no-unused-class',
+  );
+  assert.deepEqual(destructuredMessages, []);
+
+  const dynamicDestructuredMessages = await lint(
+    [
+      "import styles from './basic.module.css';",
+      'const key = readKey();',
+      'const { [key]: value } = styles;',
+    ].join('\n'),
+    fixture('Component.js'),
+    {},
+    repositoryRoot,
+    'no-unused-class',
+  );
+  assert.deepEqual(dynamicDestructuredMessages, []);
+
+  const indirectMessages = await lint(
+    "import styles from './basic.module.css';\nconsume(styles);",
+    fixture('Component.js'),
+    {},
+    repositoryRoot,
+    'no-unused-class',
+  );
+  assert.deepEqual(indirectMessages, []);
+
+  const shadowedMessages = await lint(
+    "import styles from './basic.module.css';\nfunction render(styles) { return styles.root; }",
+    fixture('Component.js'),
+    {},
+    repositoryRoot,
+    'no-unused-class',
+  );
+  assert.equal(shadowedMessages.length, 3);
+
+  const unresolvedMessages = await lint(
+    "import styles from './missing.module.css';\nstyles.root;",
+    fixture('Component.js'),
+    {},
+    repositoryRoot,
+    'no-unused-class',
+  );
+  assert.deepEqual(unresolvedMessages, []);
+});
+
+test('no-unused-class fails closed without scope and preserves raw template access', () => {
+  withTemporaryProject((rootDir) => {
+    const source = writeProjectFile(rootDir, 'Component.js', 'export {};');
+    writeProjectFile(rootDir, 'classes.module.css', '.raw-name {}');
+    const reports: unknown[] = [];
+    const binding = { name: 'styles' };
+    const reference: { parent?: unknown; type: string } = { type: 'Identifier' };
+    reference.parent = {
+      computed: true,
+      object: reference,
+      property: {
+        expressions: [],
+        quasis: [{ value: { cooked: null, raw: 'raw-name' } }],
+        type: 'TemplateLiteral',
+      },
+      type: 'MemberExpression',
+    };
+    const scope = {
+      set: new Map([['styles', { identifiers: [binding], references: [{ identifier: reference }] }]]),
+      upper: null,
+    };
+    const visitors = noUnusedClass.create({
+      cwd: rootDir,
+      options: [{}],
+      physicalFilename: source,
+      report: (report: unknown) => reports.push(report),
+      sourceCode: { getScope: () => scope },
+    } as never) as unknown as {
+      'Program:exit': () => void;
+      Program(node: unknown): void;
+    };
+
+    visitors.Program({
+      body: [
+        { type: 'ExpressionStatement' },
+        { source: { value: './classes.module.css' }, specifiers: [], type: 'ImportDeclaration' },
+        {
+          source: { value: 1 },
+          specifiers: [{ local: binding, type: 'ImportDefaultSpecifier' }],
+          type: 'ImportDeclaration',
+        },
+        {
+          source: { value: './classes.module.css' },
+          specifiers: [{ local: binding, type: 'ImportDefaultSpecifier' }],
+          type: 'ImportDeclaration',
+        },
+      ],
+    });
+    visitors['Program:exit']();
+    assert.deepEqual(reports, []);
+
+    const noScopeReports: unknown[] = [];
+    const noScopeVisitors = noUnusedClass.create({
+      cwd: rootDir,
+      options: [{}],
+      physicalFilename: source,
+      report: (report: unknown) => noScopeReports.push(report),
+      sourceCode: { getScope: () => ({ set: new Map(), upper: null }) },
+    } as never) as unknown as {
+      'Program:exit': () => void;
+      Program(node: unknown): void;
+    };
+    noScopeVisitors.Program({
+      body: [{
+        source: { value: './classes.module.css' },
+        specifiers: [{ local: binding, type: 'ImportDefaultSpecifier' }],
+        type: 'ImportDeclaration',
+      }],
+    });
+    noScopeVisitors['Program:exit']();
+    assert.deepEqual(noScopeReports, []);
+  });
 });
 
 test('compiles Sass before collecting selectors', () => {
@@ -523,6 +710,24 @@ test('finds unused local classes and preserves dynamic module access', () => {
     { stylesheet: 'orphan.module.scss', className: 'orphan' },
     { stylesheet: 'used.module.css', className: 'unused' },
   ]);
+});
+
+test('keeps CSS class identity when checking camel-cased properties', () => {
+  withTemporaryProject((rootDir) => {
+    writeProjectFile(rootDir, 'View.ts', [
+      "import styles from './View.module.css';",
+      'styles.kebabCase;',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'View.module.css', '.kebab-case {}\n.unused {}');
+
+    assert.deepEqual(findUnusedClasses({
+      rootDir,
+      localsConvention: 'camelCaseOnly',
+    }), {
+      incomplete: false,
+      unused: [{ stylesheet: join(rootDir, 'View.module.css'), className: 'unused' }],
+    });
+  });
 });
 
 test('CLI emits CI-friendly JSON and exits nonzero for unused classes', () => {
