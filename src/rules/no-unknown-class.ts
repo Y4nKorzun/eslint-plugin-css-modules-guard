@@ -18,28 +18,40 @@ const createRule = ESLintUtils.RuleCreator(
   (name) => `https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modules${name}`,
 );
 
-function staticPropertyName(node: TSESTree.MemberExpression): string | undefined {
-  if (!node.computed && node.property.type === TSESTree.AST_NODE_TYPES.Identifier) {
-    return node.property.name;
+type PropertyKey = TSESTree.MemberExpression['property'] | TSESTree.Property['key'];
+
+function staticPropertyName(property: PropertyKey, computed: boolean): string | undefined {
+  if (!computed && property.type === TSESTree.AST_NODE_TYPES.Identifier) {
+    return property.name;
   }
 
   if (
-    node.computed &&
-    node.property.type === TSESTree.AST_NODE_TYPES.Literal &&
-    typeof node.property.value === 'string'
+    property.type === TSESTree.AST_NODE_TYPES.Literal &&
+    typeof property.value === 'string'
   ) {
-    return node.property.value;
+    return property.value;
   }
 
   if (
-    node.computed &&
-    node.property.type === TSESTree.AST_NODE_TYPES.TemplateLiteral &&
-    node.property.expressions.length === 0
+    computed &&
+    property.type === TSESTree.AST_NODE_TYPES.TemplateLiteral &&
+    property.expressions.length === 0
   ) {
-    return node.property.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('');
+    return property.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('');
   }
 
   return undefined;
+}
+
+function objectPatternSource(node: TSESTree.ObjectPattern): TSESTree.Identifier | undefined {
+  const parent = node.parent;
+  const source = parent.type === TSESTree.AST_NODE_TYPES.VariableDeclarator && parent.id === node
+    ? parent.init
+    : parent.type === TSESTree.AST_NODE_TYPES.AssignmentExpression && parent.left === node
+      ? parent.right
+      : undefined;
+
+  return source?.type === TSESTree.AST_NODE_TYPES.Identifier ? source : undefined;
 }
 
 function boundedDistance(left: string, right: string, threshold: number): number {
@@ -163,7 +175,7 @@ export const noUnknownClass = createRule<Options, MessageIds>({
     const importedModules = new Map<string, ImportedModule>();
 
     const hasImportedBinding = (
-      node: TSESTree.MemberExpression,
+      node: TSESTree.Node,
       imported: ImportedModule,
     ): boolean => {
       let scope: ReturnType<typeof context.sourceCode.getScope> | null =
@@ -216,7 +228,7 @@ export const noUnknownClass = createRule<Options, MessageIds>({
         }
 
         const imported = importedModules.get(node.object.name);
-        const className = staticPropertyName(node);
+        const className = staticPropertyName(node.property, node.computed);
         if (!imported || !className || !hasImportedBinding(node, imported)) {
           return;
         }
@@ -247,6 +259,38 @@ export const noUnknownClass = createRule<Options, MessageIds>({
               }]
             : null,
         });
+      },
+      ObjectPattern(node) {
+        const source = objectPatternSource(node);
+        const imported = source && importedModules.get(source.name);
+        if (!source || !imported || !hasImportedBinding(source, imported)) {
+          return;
+        }
+
+        for (const property of node.properties) {
+          if (property.type !== TSESTree.AST_NODE_TYPES.Property) {
+            continue;
+          }
+
+          const className = staticPropertyName(property.key, property.computed);
+          if (!className || imported.classes.classes.has(className)) {
+            continue;
+          }
+
+          const suggestedClass = nearestMatch(className, imported.classes.classes, options.suggestThreshold);
+          const suggested = suggestedClass && suggestedAccess(imported.binding.name, suggestedClass);
+          context.report({
+            node: property,
+            messageId: 'unknownClass',
+            data: {
+              className,
+              stylesheet: imported.stylesheet,
+              suggestion: suggested
+                ? ` Did you mean ${suggested}?`
+                : '',
+            },
+          });
+        }
       },
     };
   },

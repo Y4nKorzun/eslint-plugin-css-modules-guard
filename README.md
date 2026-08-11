@@ -21,7 +21,7 @@ styles.primray; // Unknown CSS Module class "primray". Did you mean styles.prima
 
 ## Rule: `css-modules/no-unknown-class`
 
-The rule checks default imports ending in `.module.css`, `.module.scss`, and `.module.sass`. It validates dot access and static bracket access. Dynamic computed keys are intentionally skipped; classes named in `:global()` are also allowed because they are outside the plugin's authority.
+The rule checks default imports ending in `.module.css`, `.module.scss`, and `.module.sass`. It validates dot access, static bracket access, and static object destructuring. Dynamic computed keys are intentionally skipped; classes named in `:global()` are also allowed because they are outside the plugin's authority.
 
 ```js
 {
@@ -66,7 +66,7 @@ export default [
 
 Without that mapping, `css-modules/unresolvable-stylesheet` correctly reports an aliased stylesheet or Sass import that cannot be resolved or compiled. This is a configuration gap, not a Sass false positive.
 
-When a close class name exists, ESLint receives a suggestion that replaces the whole access expression. Editors can apply it in one click; the plugin never applies the change automatically.
+When a close class name exists, dot and bracket access receive an ESLint suggestion that replaces the whole access expression. Destructuring receives the same correction in the diagnostic; the plugin never applies a change automatically.
 
 ## Rule: `css-modules/unresolvable-stylesheet`
 

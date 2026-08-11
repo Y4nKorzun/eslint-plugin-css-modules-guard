@@ -974,6 +974,42 @@ test('handles every static CSS Module access form and bounded suggestions', asyn
   }
 });
 
+test('reports unknown CSS Module classes in static destructuring', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'Component.js', 'export {};');
+    writeProjectFile(rootDir, 'classes.module.css', '.root {}\n.primary {}\n.kebab-case {}');
+
+    const messages = await lint([
+      "import styles from './classes.module.css';",
+      'const key = readKey();',
+      "const { root, primary: renamed, ['kebab-case']: kebab, [key]: dynamic, ...rest } = styles;",
+      'const { primray } = styles;',
+      'let assigned;',
+      '({ primray: assigned } = styles);',
+      'const { missing: directMissing } = styles;',
+      'const { root: { ignored } } = styles;',
+      'const { ignored: ignoredFromCall } = getStyles();',
+      'function render(styles) { const { missing } = styles; }',
+      'const { missing } = another;',
+    ].join('\n'), source, {}, rootDir);
+
+    assert.equal(messages.length, 3);
+    assert.deepEqual(messages.map((message) => message.messageId), [
+      'unknownClass',
+      'unknownClass',
+      'unknownClass',
+    ]);
+    assert.equal(messages.filter((message) => /Unknown CSS Module class "primray"/.test(message.message)).length, 2);
+    assert.equal(messages.filter((message) => /Did you mean styles\.primary\?/.test(message.message)).length, 2);
+    assert.ok(messages.some((message) => /Unknown CSS Module class "missing"/.test(message.message)));
+    assert.ok(messages.some((message) => !/Did you mean/.test(message.message)));
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test('fails closed when ESLint cannot resolve the imported binding scope', () => {
   withTemporaryProject((rootDir) => {
     const source = writeProjectFile(rootDir, 'Component.js', 'export {};');
