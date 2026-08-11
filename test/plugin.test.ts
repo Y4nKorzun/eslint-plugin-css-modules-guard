@@ -292,6 +292,56 @@ test('uses manual aliases for Sass without a tsconfig', async () => {
   assert.deepEqual(unresolvableMessages, []);
 });
 
+test('recognizes ICSS exports without treating imports as module properties', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'View.js', 'export {};');
+    const stylesheet = writeProjectFile(rootDir, 'vars.module.scss', [
+      '$brand: #0070f3;',
+      '$bp-md: 768px;',
+      ':export {',
+      '  brandColor: $brand;',
+      '  breakpointMd: $bp-md;',
+      '}',
+      '.root { color: red; }',
+    ].join('\n'));
+    const options = normalizeOptions(undefined, rootDir);
+    const extracted = extractClasses(stylesheet, options);
+
+    assert.deepEqual(extracted?.localClasses, new Set(['root']));
+    assert.equal(extracted?.classes.has('brandColor'), true);
+    assert.equal(extracted?.classes.has('breakpointMd'), true);
+
+    const messages = await lint([
+      "import styles from './vars.module.scss';",
+      'styles.brandColor;',
+      'styles.breakpointMd;',
+      'styles.missing;',
+    ].join('\n'), source, {}, rootDir);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]!.message, /Unknown CSS Module class "missing"/);
+
+    writeProjectFile(rootDir, 'imports.module.css', [
+      ':import("./tokens.css") {',
+      '  importedColor: importedColor;',
+      '}',
+      ':export {',
+      '  exportedColor: red;',
+      '}',
+    ].join('\n'));
+    const importedMessages = await lint([
+      "import styles from './imports.module.css';",
+      'styles.exportedColor;',
+      'styles.importedColor;',
+    ].join('\n'), source, {}, rootDir);
+    assert.equal(importedMessages.length, 1);
+    assert.match(importedMessages[0]!.message, /Unknown CSS Module class "importedColor"/);
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test('skips an unresolvable Sass interpolation instead of reporting a false positive', async () => {
   const messages = await lint(
     "import styles from './sass/dynamic.module.scss';\nstyles.anything;",

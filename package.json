@@ -1,6 +1,6 @@
 {
   "name": "eslint-plugin-css-modules-guard",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "ESLint checks for real CSS Modules class names, compiled from source at lint time.",
   "author": {
     "name": "Y4nKorzun",
