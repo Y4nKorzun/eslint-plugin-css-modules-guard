@@ -1,16 +1,16 @@
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
 
-import { extractClasses, propertyNamesForClass } from '../core/extractor.js';
+import { extractClasses, usedLocalClasses } from '../core/extractor.js';
 import { normalizeOptions } from '../core/options.js';
 import { isCssModuleSpecifier, resolveStylesheet } from '../core/resolver.js';
-import type { CssModulesOptions } from '../core/types.js';
+import type { CssModulesOptions, ExtractionResult } from '../core/types.js';
 
 type Options = readonly [CssModulesOptions?];
 type MessageIds = 'unusedClass';
 
 interface ImportedModule {
-  binding: TSESTree.Identifier;
-  localClasses: ReadonlySet<string>;
+  bindings: TSESTree.Identifier[];
+  extracted: ExtractionResult;
   stylesheet: string;
 }
 
@@ -126,7 +126,7 @@ export const noUnusedClass = createRule<Options, MessageIds>({
   defaultOptions: [{}],
   create(context) {
     const options = normalizeOptions(context.options[0], context.cwd);
-    const importedModules: ImportedModule[] = [];
+    const importedModules = new Map<string, ImportedModule>();
 
     const importedVariable = (binding: TSESTree.Identifier) => {
       let scope: ReturnType<typeof context.sourceCode.getScope> | null =
@@ -163,32 +163,49 @@ export const noUnusedClass = createRule<Options, MessageIds>({
 
           const stylesheet = resolveStylesheet(context.physicalFilename, specifier, options);
           const extracted = stylesheet && extractClasses(stylesheet.path, options);
-          if (extracted) {
-            importedModules.push({
-              binding: defaultImport.local,
-              localClasses: extracted.localClasses,
+          if (!stylesheet || !extracted) {
+            continue;
+          }
+
+          const imported = importedModules.get(stylesheet.path);
+          if (imported) {
+            imported.bindings.push(defaultImport.local);
+          } else {
+            importedModules.set(stylesheet.path, {
+              bindings: [defaultImport.local],
+              extracted,
               stylesheet: specifier,
             });
           }
         }
       },
       'Program:exit'() {
-        for (const imported of importedModules) {
-          const variable = importedVariable(imported.binding);
-          if (!variable) {
+        for (const imported of importedModules.values()) {
+          if (imported.extracted.hasSassExtend) {
             continue;
           }
 
           const usedClasses = new Set<string>();
           let usageIsDynamic = false;
-          for (const reference of variable.references) {
-            const classNames = referencedClassNames(reference.identifier as TSESTree.Identifier);
-            if (!classNames) {
+          for (const binding of imported.bindings) {
+            const variable = importedVariable(binding);
+            if (!variable) {
               usageIsDynamic = true;
               break;
             }
-            for (const className of classNames) {
-              usedClasses.add(className);
+
+            for (const reference of variable.references) {
+              const classNames = referencedClassNames(reference.identifier as TSESTree.Identifier);
+              if (!classNames) {
+                usageIsDynamic = true;
+                break;
+              }
+              for (const className of classNames) {
+                usedClasses.add(className);
+              }
+            }
+            if (usageIsDynamic) {
+              break;
             }
           }
 
@@ -196,15 +213,14 @@ export const noUnusedClass = createRule<Options, MessageIds>({
             continue;
           }
 
-          for (const className of [...imported.localClasses].sort()) {
-            const isUsed = [...propertyNamesForClass(className, options.localsConvention)]
-              .some((propertyName) => usedClasses.has(propertyName));
-            if (isUsed) {
+          const usedLocal = usedLocalClasses(imported.extracted, usedClasses, options.localsConvention);
+          for (const className of [...imported.extracted.localClasses].sort()) {
+            if (usedLocal.has(className)) {
               continue;
             }
 
             context.report({
-              node: imported.binding,
+              node: imported.bindings[0]!,
               messageId: 'unusedClass',
               data: { className, stylesheet: imported.stylesheet },
             });

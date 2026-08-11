@@ -60,7 +60,7 @@ The plugin reads `compilerOptions.paths` automatically from the nearest local `t
 
 ### Aliases from Vite or webpack
 
-The plugin intentionally does not read or execute Vite or webpack configuration. If an alias exists only there, repeat its local, project-root-relative mapping with the existing `aliases` option on both rules:
+The plugin intentionally does not read or execute Vite or webpack configuration. If an alias exists only there, repeat its local, project-root-relative mapping with the existing `aliases` option on each enabled rule:
 
 ```js
 // eslint.config.js
@@ -83,6 +83,8 @@ export default [
 
 Without that mapping, `css-modules/unresolvable-stylesheet` correctly reports an aliased stylesheet or Sass import that cannot be resolved or compiled. This is a configuration gap, not a Sass false positive.
 
+If you enable `css-modules/no-unused-class`, pass it the same `aliases` mapping too.
+
 When a close class name exists, dot and bracket access receive an ESLint suggestion that replaces the whole access expression. Destructuring receives the same correction in the diagnostic; the plugin never applies a change automatically.
 
 ## Rule: `css-modules/unresolvable-stylesheet`
@@ -104,7 +106,7 @@ export default [
 ];
 ```
 
-Static dot, bracket, and object-destructuring access count as use. A dynamic key or passing the whole module to another function suppresses reports for that import rather than guessing.
+Static dot, bracket, and object-destructuring access count as use; local `composes` dependencies count too. A dynamic key or passing the whole module to another function suppresses reports for that import rather than guessing. Sass modules containing `@extend` are also skipped, because the Sass compiler owns that selector dependency.
 
 ## Project-wide unused classes CLI
 
@@ -115,7 +117,7 @@ css-modules-lint check-unused src --format json
 css-modules-lint check-unused src --cache-limit 512
 ```
 
-It exits `1` when unused classes are found and `0` otherwise. A dynamic module access marks that module as used. If any source file cannot be parsed or a CSS Module cannot be read, it exits `2` instead of claiming that no classes are unused; JSON output then contains `"incomplete": true`.
+It exits `1` when unused classes are found and `0` otherwise. A dynamic module access marks that module as used. If any source file cannot be parsed, a CSS Module cannot be read, or Sass `@extend` prevents a complete analysis, it exits `2` instead of claiming that no classes are unused; JSON output then contains `"incomplete": true`.
 
 ## Safety model
 

@@ -385,6 +385,68 @@ test('no-unused-class fails closed without scope and preserves raw template acce
   });
 });
 
+test('keeps composed and Sass-extended classes out of no-unused-class reports', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'View.js', 'export {};');
+    writeProjectFile(rootDir, 'composed.module.css', [
+      '.base {}',
+      '.left { composes: base; }',
+      '.right { composes: base; }',
+      '.root { composes: left right; }',
+    ].join('\n'));
+
+    const composedMessages = await lint(
+      "import styles from './composed.module.css';\nstyles.root;",
+      source,
+      {},
+      rootDir,
+      'no-unused-class',
+    );
+    assert.deepEqual(composedMessages, []);
+
+    writeProjectFile(rootDir, 'duplicates.module.css', '.root {}\n.primary {}\n.unused {}');
+    const duplicateMessages = await lint([
+      "import first from './duplicates.module.css';",
+      "import second from './duplicates.module.css';",
+      'first.root;',
+      'second.primary;',
+    ].join('\n'), source, {}, rootDir, 'no-unused-class');
+    assert.equal(duplicateMessages.length, 1);
+    assert.match(duplicateMessages[0]!.message, /Unused CSS Module class "unused"/);
+
+    const dynamicDuplicateMessages = await lint([
+      "import first from './duplicates.module.css';",
+      "import second from './duplicates.module.css';",
+      'const key = readKey();',
+      'first[key];',
+      'second.root;',
+    ].join('\n'), source, {}, rootDir, 'no-unused-class');
+    assert.deepEqual(dynamicDuplicateMessages, []);
+
+    writeProjectFile(rootDir, 'extended.module.scss', [
+      '.base { color: red; }',
+      '.notice { @extend .base; }',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'Extended.js', [
+      "import styles from './extended.module.scss';",
+      'styles.notice;',
+    ].join('\n'));
+    const extendedMessages = await lint(
+      "import styles from './extended.module.scss';\nstyles.notice;",
+      source,
+      {},
+      rootDir,
+      'no-unused-class',
+    );
+    assert.deepEqual(extendedMessages, []);
+    assert.deepEqual(findUnusedClasses({ rootDir }), { incomplete: true, unused: [] });
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test('compiles Sass before collecting selectors', () => {
   const options = normalizeOptions(undefined, repositoryRoot);
   const extracted = extractClasses(fixture('sass', 'features.module.scss'), options);
