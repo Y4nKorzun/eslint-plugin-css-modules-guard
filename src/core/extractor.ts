@@ -588,7 +588,7 @@ function extractCssModule(
 
   const classes = new Set<string>();
   for (const exportedValue of parsed.exportedValues) {
-    classes.add(exportedValue);
+    addClassNames(classes, exportedValue, options.localsConvention);
   }
   for (const className of parsed.globalClasses) {
     addClassNames(classes, className, options.localsConvention);

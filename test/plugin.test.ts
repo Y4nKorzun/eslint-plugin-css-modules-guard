@@ -302,6 +302,7 @@ test('recognizes ICSS exports without treating imports as module properties', as
       '$bp-md: 768px;',
       ':export {',
       '  brandColor: $brand;',
+      '  brand-color: $brand;',
       '  breakpointMd: $bp-md;',
       '}',
       '.root { color: red; }',
@@ -311,6 +312,7 @@ test('recognizes ICSS exports without treating imports as module properties', as
 
     assert.deepEqual(extracted?.localClasses, new Set(['root']));
     assert.equal(extracted?.classes.has('brandColor'), true);
+    assert.equal(extracted?.classes.has('brand-color'), true);
     assert.equal(extracted?.classes.has('breakpointMd'), true);
 
     const messages = await lint([
@@ -321,6 +323,12 @@ test('recognizes ICSS exports without treating imports as module properties', as
     ].join('\n'), source, {}, rootDir);
     assert.equal(messages.length, 1);
     assert.match(messages[0]!.message, /Unknown CSS Module class "missing"/);
+
+    const camelCaseMessages = await lint([
+      "import styles from './vars.module.scss';",
+      'styles.brandColor;',
+    ].join('\n'), source, { localsConvention: 'camelCaseOnly' }, rootDir);
+    assert.deepEqual(camelCaseMessages, []);
 
     writeProjectFile(rootDir, 'imports.module.css', [
       ':import("./tokens.css") {',
