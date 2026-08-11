@@ -1,6 +1,6 @@
 # eslint-plugin-css-modules-guard
 
-An ESLint 9 and 10 flat-config plugin that reads local CSS Modules at lint time and reports unknown `styles.foo` properties. SCSS and Sass are compiled with Dart Sass first, so nesting, mixins, `@extend`, and static interpolation resolve to their real selectors.
+An ESLint 9 and 10 flat-config plugin that reads local CSS Modules at lint time. It reports unknown `styles.foo` properties and CSS Modules that cannot be resolved or compiled. SCSS and Sass are compiled with Dart Sass first, so nesting, mixins, `@extend`, and static interpolation resolve to their real selectors.
 
 ```sh
 npm install --save-dev eslint-plugin-css-modules-guard eslint
@@ -36,7 +36,13 @@ The rule checks default imports ending in `.module.css`, `.module.scss`, and `.m
 }
 ```
 
-The plugin reads `compilerOptions.paths` automatically from the nearest local `tsconfig.json`, including safe local project references. `camelCase` and `dashes` expose both the original and camel-cased property name; `camelCaseOnly` exposes only the latter.
+The plugin reads `compilerOptions.paths` automatically from the nearest local `tsconfig.json`, including safe local project references, for CSS Module imports and local Sass `@use` / `@forward` paths. `camelCase` and `dashes` expose both the original and camel-cased property name; `camelCaseOnly` exposes only the latter.
+
+When a close class name exists, ESLint receives a suggestion that replaces the whole access expression. Editors can apply it in one click; the plugin never applies the change automatically.
+
+## Rule: `css-modules/unresolvable-stylesheet`
+
+The recommended config enables this rule. It reports a default CSS Module import when the stylesheet is missing, unsafe, or fails to compile. This prevents an unsupported Sass construct from looking like a successful lint run.
 
 ## Unused classes CLI
 
@@ -46,7 +52,7 @@ The plugin reads `compilerOptions.paths` automatically from the nearest local `t
 css-modules-lint check-unused src --format json
 ```
 
-It exits `1` when unused classes are found and `0` otherwise. A dynamic module access marks that module as used, and a source-file parse failure produces no findings rather than a false positive.
+It exits `1` when unused classes are found and `0` otherwise. A dynamic module access marks that module as used. If any source file cannot be parsed or a CSS Module cannot be read, it exits `2` instead of claiming that no classes are unused; JSON output then contains `"incomplete": true`.
 
 ## Safety model
 

@@ -6,7 +6,7 @@ import { isCssModuleSpecifier, resolveStylesheet } from '../core/resolver.js';
 import type { CssModulesOptions, ExtractionResult } from '../core/types.js';
 
 type Options = readonly [CssModulesOptions?];
-type MessageIds = 'unknownClass';
+type MessageIds = 'suggestedClass' | 'unknownClass';
 
 interface ImportedModule {
   binding: TSESTree.Identifier;
@@ -118,6 +118,7 @@ export const noUnknownClass = createRule<Options, MessageIds>({
   name: 'no-unknown-class',
   meta: {
     type: 'problem',
+    hasSuggestions: true,
     docs: {
       description: 'Require CSS Module properties to exist in the source stylesheet.',
     },
@@ -148,6 +149,7 @@ export const noUnknownClass = createRule<Options, MessageIds>({
       },
     ],
     messages: {
+      suggestedClass: 'Replace with "{{suggestion}}".',
       unknownClass: 'Unknown CSS Module class "{{className}}" in "{{stylesheet}}".{{suggestion}}',
     },
   },
@@ -219,17 +221,27 @@ export const noUnknownClass = createRule<Options, MessageIds>({
           return;
         }
 
-        const suggestion = nearestMatch(className, imported.classes.classes, options.suggestThreshold);
+        const suggestedClass = nearestMatch(className, imported.classes.classes, options.suggestThreshold);
+        const suggested = suggestedClass && suggestedAccess(imported.binding.name, suggestedClass);
         context.report({
-          node: node.property,
+          node,
           messageId: 'unknownClass',
           data: {
             className,
             stylesheet: imported.stylesheet,
-            suggestion: suggestion
-              ? ` Did you mean ${suggestedAccess(imported.binding.name, suggestion)}?`
+            suggestion: suggested
+              ? ` Did you mean ${suggested}?`
               : '',
           },
+          suggest: suggested
+            ? [{
+                messageId: 'suggestedClass',
+                data: { suggestion: suggested },
+                fix(fixer) {
+                  return fixer.replaceText(node, suggested);
+                },
+              }]
+            : null,
         });
       },
     };

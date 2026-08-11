@@ -18,6 +18,11 @@ export interface UnusedClass {
   className: string;
 }
 
+export interface UnusedClassesResult {
+  incomplete: boolean;
+  unused: UnusedClass[];
+}
+
 interface Usage {
   all: boolean;
   classes: Set<string>;
@@ -26,6 +31,11 @@ interface Usage {
 interface ImportedBinding {
   binding: ts.Identifier;
   stylesheet: string;
+}
+
+interface FileCollection {
+  files: string[];
+  incomplete: boolean;
 }
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']);
@@ -46,8 +56,9 @@ function isInsideOrEqual(rootDir: string, candidate: string): boolean {
 function collectFiles(
   rootDir: string,
   requestedPaths: readonly string[] | undefined,
-): string[] {
+): FileCollection {
   const files: string[] = [];
+  let incomplete = false;
   const startPaths = requestedPaths?.length ? requestedPaths : [rootDir];
 
   const visit = (candidate: string): void => {
@@ -55,25 +66,30 @@ function collectFiles(
     try {
       realPath = realpathSync(candidate);
     } catch {
+      incomplete = true;
       return;
     }
 
     if (!isInsideOrEqual(rootDir, realPath)) {
+      incomplete = true;
       return;
     }
 
-    const entries = readdirSync(realPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isSymbolicLink() || (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name))) {
-        continue;
-      }
+    try {
+      for (const entry of readdirSync(realPath, { withFileTypes: true })) {
+        if (entry.isSymbolicLink() || (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name))) {
+          continue;
+        }
 
-      const entryPath = join(realPath, entry.name);
-      if (entry.isDirectory()) {
-        visit(entryPath);
-      } else if (entry.isFile() && (isSourceFile(entryPath) || isCssModuleFile(entryPath))) {
-        files.push(entryPath);
+        const entryPath = join(realPath, entry.name);
+        if (entry.isDirectory()) {
+          visit(entryPath);
+        } else if (entry.isFile() && (isSourceFile(entryPath) || isCssModuleFile(entryPath))) {
+          files.push(entryPath);
+        }
       }
+    } catch {
+      incomplete = true;
     }
   };
 
@@ -86,16 +102,18 @@ function collectFiles(
         const realPath = realpathSync(candidate);
         if (isInsideOrEqual(rootDir, realPath)) {
           files.push(realPath);
+        } else {
+          incomplete = true;
         }
       } else {
         visit(candidate);
       }
     } catch {
-      // A missing path does not make a lint run unsafe or crash the CLI.
+      incomplete = true;
     }
   }
 
-  return [...new Set(files)].sort();
+  return { files: [...new Set(files)].sort(), incomplete };
 }
 
 function scriptKind(filePath: string): ts.ScriptKind {
@@ -210,14 +228,15 @@ function scanSourceFile(
   return true;
 }
 
-export function findUnusedClasses(input: UnusedCheckOptions): UnusedClass[] {
+export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResult {
   const rootDir = realpathSync(input.rootDir);
   const { rootDir: _rootDir, paths, ...ruleOptions } = input;
   const options = normalizeOptions(ruleOptions, rootDir);
-  const files = collectFiles(rootDir, paths);
+  const collection = collectFiles(rootDir, paths);
+  const { files } = collection;
   const stylesheets = files.filter(isCssModuleFile);
   const usages = new Map<string, Usage>();
-  let scanWasIncomplete = false;
+  let scanWasIncomplete = collection.incomplete;
 
   for (const filePath of files) {
     if (isSourceFile(filePath) && !scanSourceFile(filePath, options, usages)) {
@@ -226,14 +245,14 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClass[] {
   }
 
   if (scanWasIncomplete) {
-    return [];
+    return { incomplete: true, unused: [] };
   }
 
   const unused: UnusedClass[] = [];
   for (const stylesheet of stylesheets) {
     const extracted = extractClasses(stylesheet, options);
     if (!extracted) {
-      continue;
+      return { incomplete: true, unused: [] };
     }
 
     const usage = usages.get(stylesheet);
@@ -248,9 +267,12 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClass[] {
     }
   }
 
-  return unused.sort((left, right) =>
-    left.stylesheet.localeCompare(right.stylesheet) || left.className.localeCompare(right.className),
-  );
+  return {
+    incomplete: false,
+    unused: unused.sort((left, right) =>
+      left.stylesheet.localeCompare(right.stylesheet) || left.className.localeCompare(right.className),
+    ),
+  };
 }
 
 export function relativeUnusedClasses(rootDir: string, unused: readonly UnusedClass[]): UnusedClass[] {

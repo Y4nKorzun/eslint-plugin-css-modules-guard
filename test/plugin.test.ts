@@ -37,7 +37,10 @@ import {
 import { findUnusedClasses, relativeUnusedClasses } from '../src/core/unused.js';
 import plugin from '../src/index.js';
 import { noUnknownClass } from '../src/rules/no-unknown-class.js';
+import { unresolvableStylesheet } from '../src/rules/unresolvable-stylesheet.js';
 import type { CssModulesOptions } from '../src/core/types.js';
+
+type TestRule = 'no-unknown-class' | 'unresolvable-stylesheet';
 
 const repositoryRoot = resolve(process.cwd());
 const packageManifest = JSON.parse(
@@ -47,6 +50,7 @@ const packageManifest = JSON.parse(
   bugs: { url: string };
   homepage: string;
   repository: { type: string; url: string };
+  version: string;
 };
 const fixture = (...segments: string[]): string => join(repositoryRoot, 'test', 'fixtures', ...segments);
 
@@ -55,6 +59,7 @@ async function lint(
   filePath: string,
   options: CssModulesOptions = {},
   cwd = repositoryRoot,
+  rule: TestRule = 'no-unknown-class',
 ): Promise<ESLint.LintResult['messages']> {
   const eslint = new ESLint({
     cwd,
@@ -69,11 +74,12 @@ async function lint(
         'css-modules': {
           rules: {
             'no-unknown-class': noUnknownClass,
+            'unresolvable-stylesheet': unresolvableStylesheet,
           },
         },
       },
       rules: {
-        'css-modules/no-unknown-class': ['error', options],
+        [`css-modules/${rule}`]: ['error', options],
       },
     } as never,
   });
@@ -116,8 +122,10 @@ function writeProjectFile(rootDir: string, fileName: string, contents: string): 
 
 test('recommended config exposes the plugin rule', () => {
   assert.equal(plugin.meta.name, 'eslint-plugin-css-modules-guard');
+  assert.equal(plugin.meta.version, packageManifest.version);
   assert.equal(plugin.configs.recommended.plugins['css-modules'], plugin);
   assert.equal(plugin.configs.recommended.rules['css-modules/no-unknown-class'], 'error');
+  assert.equal(plugin.configs.recommended.rules['css-modules/unresolvable-stylesheet'], 'error');
 });
 
 test('published CLI metadata uses an npm-valid bin path', () => {
@@ -142,6 +150,9 @@ test('reports static unknown properties with a correction', async () => {
   assert.equal(messages.length, 1);
   assert.match(messages[0]!.message, /Unknown CSS Module class "primray"/);
   assert.match(messages[0]!.message, /buttonStyles\.primary/);
+  assert.equal(messages[0]!.suggestions?.length, 1);
+  assert.equal(messages[0]!.suggestions?.[0]?.desc, 'Replace with "buttonStyles.primary".');
+  assert.equal(messages[0]!.suggestions?.[0]?.fix.text, 'buttonStyles.primary');
 });
 
 test('skips dynamic access and shadowed bindings', async () => {
@@ -193,6 +204,23 @@ test('uses configured local Sass load paths', () => {
   assert.ok(extracted?.classes.has('tone'));
 });
 
+test('uses referenced tsconfig aliases for nested Sass imports', async () => {
+  const rootDir = fixture('sass-alias');
+  const stylesheet = fixture('sass-alias', 'src', 'components', 'Aliased.module.scss');
+  const extracted = extractClasses(stylesheet, normalizeOptions(undefined, rootDir));
+
+  assert.ok(extracted?.classes.has('alias'));
+
+  const messages = await lint([
+    "import styles from './Aliased.module.scss';",
+    'styles.alias;',
+    'styles.alsi;',
+  ].join('\n'), fixture('sass-alias', 'src', 'components', 'View.js'), {}, rootDir);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]!.ruleId, 'css-modules/no-unknown-class');
+  assert.match(messages[0]!.message, /Unknown CSS Module class "alsi"/);
+});
+
 test('skips an unresolvable Sass interpolation instead of reporting a false positive', async () => {
   const messages = await lint(
     "import styles from './sass/dynamic.module.scss';\nstyles.anything;",
@@ -200,6 +228,24 @@ test('skips an unresolvable Sass interpolation instead of reporting a false posi
   );
 
   assert.equal(messages.length, 0);
+});
+
+test('reports unresolved and uncompilable CSS Modules separately', async () => {
+  const messages = await lint([
+    "import styles from './basic.module.css';",
+    "import missing from './missing.module.scss';",
+    "import broken from './sass/dynamic.module.scss';",
+    "import ordinary from './ordinary.js';",
+    "import * as namespace from './basic.module.css';",
+    "import { root } from './basic.module.css';",
+    "import './basic.module.css';",
+    'styles.root;',
+  ].join('\n'), fixture('Component.js'), {}, repositoryRoot, 'unresolvable-stylesheet');
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0]!.ruleId, 'css-modules/unresolvable-stylesheet');
+  assert.match(messages[0]!.message, /Unable to resolve CSS Module "\.\/missing\.module\.scss"/);
+  assert.match(messages[1]!.message, /Unable to compile CSS Module "\.\/sass\/dynamic\.module\.scss"/);
 });
 
 test('resolves tsconfig path aliases and composition dependencies', async () => {
@@ -264,11 +310,40 @@ test('invalidates the in-memory cache when the stylesheet content changes', () =
   }
 });
 
+test('invalidates the Sass cache when a tsconfig alias changes', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    const stylesheet = writeProjectFile(rootDir, 'src/entry.module.scss', [
+      "@use '@theme' as theme;",
+      '.entry-#{theme.$name} { color: red; }',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'src/first/_theme.scss', '$name: first;');
+    writeProjectFile(rootDir, 'src/second/_theme.scss', '$name: second;');
+    writeProjectFile(rootDir, 'tsconfig.json', JSON.stringify({
+      references: [{ path: './config/tsconfig.app.json' }],
+    }));
+    writeProjectFile(rootDir, 'config/tsconfig.app.json', JSON.stringify({
+      compilerOptions: { baseUrl: '..', paths: { '@theme': ['src/first/theme'] } },
+    }));
+
+    const options = normalizeOptions(undefined, rootDir);
+    assert.equal(extractClasses(stylesheet, options)?.classes.has('entry-first'), true);
+
+    writeProjectFile(rootDir, 'config/tsconfig.app.json', JSON.stringify({
+      compilerOptions: { baseUrl: '..', paths: { '@theme': ['src/second/theme'] } },
+    }));
+    const extracted = extractClasses(stylesheet, options);
+    assert.equal(extracted?.classes.has('entry-first'), false);
+    assert.equal(extracted?.classes.has('entry-second'), true);
+  });
+});
+
 test('finds unused local classes and preserves dynamic module access', () => {
   const rootDir = fixture('unused');
-  const unused = relativeUnusedClasses(rootDir, findUnusedClasses({ rootDir }));
+  const result = findUnusedClasses({ rootDir });
 
-  assert.deepEqual(unused, [
+  assert.equal(result.incomplete, false);
+  assert.deepEqual(relativeUnusedClasses(rootDir, result.unused), [
     { stylesheet: 'orphan.module.scss', className: 'orphan' },
     { stylesheet: 'used.module.css', className: 'unused' },
   ]);
@@ -528,7 +603,18 @@ test('rejects unsafe Sass importer URLs before reading files', () => {
   withTemporaryProject((rootDir) => {
     const entry = writeProjectFile(rootDir, 'entry.module.scss', '.entry { color: red; }');
     const nested = writeProjectFile(rootDir, 'nested.scss', '$color: red;');
+    const aliased = writeProjectFile(rootDir, 'src/_aliased.scss', '$color: green;');
+    const configPath = writeProjectFile(rootDir, 'tsconfig.json', JSON.stringify({
+      compilerOptions: {
+        paths: {
+          '@/*': ['src/*'],
+          '@outside/*': ['../outside/*'],
+          theme: ['src/aliased'],
+        },
+      },
+    }));
     writeProjectFile(rootDir, 'child.scss', '$color: blue;');
+    writeProjectFile(rootDir, 'theme.scss', '$color: blue;');
     const options = normalizeOptions(undefined, rootDir);
     const dependencies = new Set<string>();
     const importer = safeSassImporter(entry, options, dependencies) as unknown as {
@@ -541,13 +627,20 @@ test('rejects unsafe Sass importer URLs before reading files', () => {
 
     assert.equal(importer.canonicalize('sass:math', {}), null);
     assert.ok(importer.canonicalize('nested', {}) instanceof URL);
+    assert.ok(importer.canonicalize('@/aliased', {}) instanceof URL);
+    assert.equal(importer.canonicalize('theme', {})?.href, customUrl(aliased).href);
     assert.ok(importer.canonicalize(customUrl(nested).href, {}) instanceof URL);
     assert.ok(importer.canonicalize('child', { containingUrl: customUrl(nested) }) instanceof URL);
+    assert.ok(importer.canonicalize('./child', { containingUrl: customUrl(nested) }) instanceof URL);
     assert.ok(importer.canonicalize('child', { containingUrl: pathToFileURL(nested) }) instanceof URL);
     assert.equal(importer.load(customUrl(nested)).contents, '$color: red;');
     assert.equal(dependencies.has(nested), true);
+    assert.equal(dependencies.has(aliased), true);
+    assert.equal(dependencies.has(configPath), true);
 
     assert.throws(() => importer.canonicalize('pkg:outside', {}));
+    assert.throws(() => importer.canonicalize('@/../../outside', {}));
+    assert.throws(() => importer.canonicalize('@outside/secret', {}));
     assert.throws(() => importer.canonicalize(
       `css-modules-real://${pathToFileURL(join(rootDir, 'missing.scss')).pathname}`,
       {},
@@ -556,6 +649,7 @@ test('rejects unsafe Sass importer URLs before reading files', () => {
       `css-modules-real://${pathToFileURL(join(dirname(rootDir), 'outside.scss')).pathname}`,
       {},
     ));
+    assert.throws(() => importer.canonicalize(customUrl(rootDir).href, {}));
     assert.throws(() => importer.canonicalize('css-modules-real:///%E0%A4%A', {}));
     assert.throws(() => importer.canonicalize('child', {
       containingUrl: new URL('css-modules-real:///%E0%A4%A'),
@@ -636,31 +730,40 @@ test('scans supported source files conservatively and ignores unsafe paths', () 
     symlinkSync(outside, join(rootDir, 'linked.module.css'));
 
     try {
-      assert.deepEqual(relativeUnusedClasses(rootDir, findUnusedClasses({ rootDir })), [
-        { stylesheet: 'static.module.css', className: 'unused' },
-      ]);
-      assert.deepEqual(relativeUnusedClasses(rootDir, findUnusedClasses({
+      assert.deepEqual(findUnusedClasses({ rootDir }), { incomplete: true, unused: [] });
+      const selected = findUnusedClasses({
         rootDir,
         paths: ['static.module.css'],
-      })), [
+      });
+      assert.equal(selected.incomplete, false);
+      assert.deepEqual(relativeUnusedClasses(rootDir, selected.unused), [
         { stylesheet: 'static.module.css', className: 'unused' },
         { stylesheet: 'static.module.css', className: 'used' },
       ]);
-      assert.deepEqual(findUnusedClasses({ rootDir, paths: ['static.ts'] }), []);
-      assert.deepEqual(findUnusedClasses({ rootDir, paths: ['missing'] }), []);
-      assert.deepEqual(findUnusedClasses({ rootDir, paths: ['missing.module.css'] }), []);
-      assert.deepEqual(findUnusedClasses({ rootDir, paths: [outsideDir] }), []);
+      assert.deepEqual(findUnusedClasses({ rootDir, paths: ['static.ts'] }), { incomplete: false, unused: [] });
+      assert.deepEqual(findUnusedClasses({ rootDir, paths: ['missing'] }), { incomplete: true, unused: [] });
+      assert.deepEqual(findUnusedClasses({ rootDir, paths: ['missing.module.css'] }), { incomplete: true, unused: [] });
+      assert.deepEqual(findUnusedClasses({ rootDir, paths: [outsideDir] }), { incomplete: true, unused: [] });
+      assert.deepEqual(findUnusedClasses({ rootDir, paths: [outside] }), { incomplete: true, unused: [] });
+      writeProjectFile(rootDir, 'not-a-directory', 'not a source file');
+      assert.deepEqual(findUnusedClasses({ rootDir, paths: ['not-a-directory'] }), {
+        incomplete: true,
+        unused: [],
+      });
 
       const unreadable = writeProjectFile(rootDir, 'unreadable.ts', 'export const value = 1;');
       chmodSync(unreadable, 0);
       try {
-        assert.deepEqual(findUnusedClasses({ rootDir, paths: [unreadable, staticStyles] }), []);
+        assert.deepEqual(findUnusedClasses({ rootDir, paths: [unreadable, staticStyles] }), {
+          incomplete: true,
+          unused: [],
+        });
       } finally {
         chmodSync(unreadable, 0o644);
       }
 
       writeProjectFile(rootDir, 'broken.ts', 'const = ;');
-      assert.deepEqual(findUnusedClasses({ rootDir }), []);
+      assert.deepEqual(findUnusedClasses({ rootDir }), { incomplete: true, unused: [] });
       assert.equal(extensionStyles.startsWith(rootDir), true);
     } finally {
       rmSync(outsideDir, { force: true, recursive: true });
@@ -845,6 +948,19 @@ test('CLI covers valid flags, text output, and invalid input safely', () => {
     ], (line) => output.push(line)), 1);
     assert.deepEqual(output, ['unused.module.css: unused']);
 
+    writeProjectFile(rootDir, 'broken.ts', 'const = ;');
+    output.length = 0;
+    assert.equal(runCli(['check-unused', '--root', rootDir], (line) => output.push(line)), 2);
+    assert.deepEqual(output, ['Unable to complete unused CSS Module class scan.']);
+
+    output.length = 0;
+    assert.equal(runCli([
+      'check-unused',
+      '--root', rootDir,
+      '--format', 'json',
+    ], (line) => output.push(line)), 2);
+    assert.deepEqual(JSON.parse(output.join('\n')), { unused: [], incomplete: true });
+
     for (const args of [
       ['unknown-command'],
       ['check-unused', '--root'],
@@ -888,16 +1004,18 @@ test('runs the CLI process bridge only for its own entrypoint', () => {
   withTemporaryProject((rootDir) => {
     const moduleUrl = new URL('../src/cli.js', import.meta.url).href;
     const cliPath = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+    const cliLink = join(rootDir, 'css-modules-lint');
     const originalExitCode = process.exitCode;
     const output: string[] = [];
 
     try {
+      symlinkSync(cliPath, cliLink);
       runCliFromProcess(moduleUrl, [process.execPath, 'not-the-cli'], (line) => output.push(line));
       assert.equal(output.length, 0);
 
       runCliFromProcess(
         moduleUrl,
-        [process.execPath, cliPath, 'check-unused', '--root', rootDir],
+        [process.execPath, cliLink, 'check-unused', '--root', rootDir],
         (line) => output.push(line),
       );
       assert.deepEqual(output, ['No unused CSS Module classes found.']);
