@@ -145,6 +145,10 @@ export const noUnknownClass = createRule<Options, MessageIds>({
             maximum: 10,
           },
           cache: { type: 'boolean' },
+          cacheLimit: {
+            type: 'integer',
+            minimum: 1,
+          },
         },
       },
     ],

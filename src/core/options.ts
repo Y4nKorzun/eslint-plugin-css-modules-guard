@@ -9,6 +9,7 @@ const DEFAULTS: Required<CssModulesOptions> = {
   sassLoadPaths: [],
   suggestThreshold: 2,
   cache: true,
+  cacheLimit: 256,
 };
 
 export function normalizeOptions(
@@ -16,6 +17,7 @@ export function normalizeOptions(
   rootDir: string,
 ): ExtractorOptions {
   let safeRoot = resolve(rootDir);
+  const cacheLimit = options?.cacheLimit ?? DEFAULTS.cacheLimit;
 
   try {
     safeRoot = realpathSync(safeRoot);
@@ -30,5 +32,8 @@ export function normalizeOptions(
     sassLoadPaths: options?.sassLoadPaths ?? DEFAULTS.sassLoadPaths,
     suggestThreshold: options?.suggestThreshold ?? DEFAULTS.suggestThreshold,
     cache: options?.cache ?? DEFAULTS.cache,
+    cacheLimit: Number.isSafeInteger(cacheLimit) && cacheLimit > 0
+      ? cacheLimit
+      : DEFAULTS.cacheLimit,
   };
 }

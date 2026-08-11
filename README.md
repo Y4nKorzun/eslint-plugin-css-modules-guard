@@ -31,12 +31,15 @@ The rule checks default imports ending in `.module.css`, `.module.scss`, and `.m
       sassLoadPaths: ['src/styles'],
       suggestThreshold: 2,
       cache: true,
+      cacheLimit: 512,
     }],
   },
 }
 ```
 
 The plugin reads `compilerOptions.paths` automatically from the nearest local `tsconfig.json`, including safe local project references, for CSS Module imports and local Sass `@use` / `@forward` paths. `camelCase` and `dashes` expose both the original and camel-cased property name; `camelCaseOnly` exposes only the latter.
+
+`cacheLimit` defaults to `256` and only bounds the in-memory extraction cache. When overriding `configs.recommended`, apply the same limit to both rules so either rule does not lower the shared cache limit.
 
 ### Aliases from Vite or webpack
 
@@ -75,6 +78,7 @@ The recommended config enables this rule. It reports a default CSS Module import
 
 ```sh
 css-modules-lint check-unused src --format json
+css-modules-lint check-unused src --cache-limit 512
 ```
 
 It exits `1` when unused classes are found and `0` otherwise. A dynamic module access marks that module as used. If any source file cannot be parsed or a CSS Module cannot be read, it exits `2` instead of claiming that no classes are unused; JSON output then contains `"incomplete": true`.
@@ -85,6 +89,6 @@ It exits `1` when unused classes are found and `0` otherwise. A dynamic module a
 - Rejects paths outside that root, symlink escapes, `node_modules` composition, remote Sass URLs, and package Sass imports.
 - Sass uses a local-only importer; configured load paths must also be under the project root.
 - Performs no writes, subprocess execution, `eval`, or configuration execution. `tsconfig.json` is parsed as data.
-- Keeps at most 256 content-hash-validated entries in memory; it never creates a cache file.
+- Keeps at most 256 content-hash-validated, recently used entries in memory by default; set `cacheLimit` (or CLI `--cache-limit`) for larger projects. It never creates a cache file.
 
 CSS-in-JS, automatic Vite/webpack configuration parsing, webpack-loader integration, and composition from npm packages are intentionally out of scope.

@@ -36,7 +36,6 @@ interface CompiledStylesheet {
   dependencies: Map<string, string>;
 }
 
-const CACHE_LIMIT = 256;
 const SAFE_SASS_URL_SCHEME = 'css-modules-real:';
 const SASS_EXTENSIONS = ['.scss', '.sass', '.css'];
 const extractionCache = new Map<string, CacheEntry>();
@@ -60,18 +59,20 @@ function isCacheValid(entry: CacheEntry): boolean {
 }
 
 function cacheKey(filePath: string, options: ExtractorOptions): string {
-  return [filePath, options.rootDir, ...options.sassLoadPaths].join('\0');
+  const aliases = Object.entries(options.aliases).sort(([left], [right]) => left.localeCompare(right));
+  return [filePath, options.rootDir, ...options.sassLoadPaths, JSON.stringify(aliases)].join('\0');
 }
 
-function remember(key: string, entry: CacheEntry): void {
-  extractionCache.set(key, entry);
-
-  if (extractionCache.size > CACHE_LIMIT) {
+function trimCache(cacheLimit: number): void {
+  while (extractionCache.size > cacheLimit) {
     const oldestKey = extractionCache.keys().next().value;
-    if (oldestKey) {
-      extractionCache.delete(oldestKey);
-    }
+    extractionCache.delete(oldestKey!);
   }
+}
+
+function remember(key: string, entry: CacheEntry, cacheLimit: number): void {
+  extractionCache.set(key, entry);
+  trimCache(cacheLimit);
 }
 
 function safeLoadPaths(options: ExtractorOptions): string[] {
@@ -432,9 +433,14 @@ function loadParsedStylesheet(
   options: ExtractorOptions,
 ): ParsedStylesheet | undefined {
   const key = cacheKey(filePath, options);
+  if (options.cache) {
+    trimCache(options.cacheLimit);
+  }
   const cached = options.cache ? extractionCache.get(key) : undefined;
 
   if (cached && isCacheValid(cached)) {
+    extractionCache.delete(key);
+    extractionCache.set(key, cached);
     return cached.parsed;
   }
 
@@ -449,7 +455,7 @@ function loadParsedStylesheet(
   }
 
   if (options.cache) {
-    remember(key, { dependencies: compiled.dependencies, parsed });
+    remember(key, { dependencies: compiled.dependencies, parsed }, options.cacheLimit);
   }
 
   return parsed;
@@ -591,4 +597,8 @@ export function extractClasses(
 
 export function clearExtractionCache(): void {
   extractionCache.clear();
+}
+
+export function getExtractionCacheKeys(): readonly string[] {
+  return [...extractionCache.keys()];
 }
