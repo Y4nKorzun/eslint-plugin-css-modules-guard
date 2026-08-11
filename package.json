@@ -1,7 +1,7 @@
 {
   "name": "eslint-plugin-css-modules-guard",
-  "version": "0.8.0",
-  "description": "ESLint checks for real CSS Modules class names, compiled from source at lint time.",
+  "version": "0.8.1",
+  "description": "ESLint 9/10 plugin that validates CSS Modules against local CSS, SCSS, and Sass source.",
   "author": {
     "name": "Y4nKorzun",
     "url": "https://github.com/Y4nKorzun"
@@ -52,8 +52,13 @@
   "keywords": [
     "eslint",
     "eslint-plugin",
+    "eslint-plugin-css-modules",
     "css-modules",
-    "sass"
+    "css-module",
+    "css-modules-lint",
+    "scss",
+    "sass",
+    "typescript"
   ],
   "license": "MIT",
   "peerDependencies": {
