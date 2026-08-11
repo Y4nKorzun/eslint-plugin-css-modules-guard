@@ -43,13 +43,35 @@ function staticPropertyName(property: PropertyKey, computed: boolean): string | 
   return undefined;
 }
 
+function isDirectFunctionParameter(node: TSESTree.AssignmentPattern): boolean {
+  const parent = node.parent;
+  switch (parent.type) {
+    case TSESTree.AST_NODE_TYPES.ArrowFunctionExpression:
+    case TSESTree.AST_NODE_TYPES.FunctionDeclaration:
+    case TSESTree.AST_NODE_TYPES.FunctionExpression:
+      return parent.params.includes(node);
+    default:
+      return false;
+  }
+}
+
 function objectPatternSource(node: TSESTree.ObjectPattern): TSESTree.Identifier | undefined {
   const parent = node.parent;
-  const source = parent.type === TSESTree.AST_NODE_TYPES.VariableDeclarator && parent.id === node
-    ? parent.init
-    : parent.type === TSESTree.AST_NODE_TYPES.AssignmentExpression && parent.left === node
-      ? parent.right
-      : undefined;
+  let source: TSESTree.Expression | null | undefined;
+
+  if (parent.type === TSESTree.AST_NODE_TYPES.VariableDeclarator && parent.id === node) {
+    source = parent.init;
+  } else if (parent.type === TSESTree.AST_NODE_TYPES.AssignmentExpression && parent.left === node) {
+    source = parent.right;
+  } else if (
+    parent.type === TSESTree.AST_NODE_TYPES.AssignmentPattern &&
+    parent.left === node &&
+    isDirectFunctionParameter(parent)
+  ) {
+    source = parent.right;
+  } else {
+    return undefined;
+  }
 
   return source?.type === TSESTree.AST_NODE_TYPES.Identifier ? source : undefined;
 }

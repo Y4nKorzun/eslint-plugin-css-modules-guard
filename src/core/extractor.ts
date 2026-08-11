@@ -59,7 +59,7 @@ function isCacheValid(entry: CacheEntry): boolean {
 }
 
 function cacheKey(filePath: string, options: ExtractorOptions): string {
-  const aliases = Object.entries(options.aliases).sort(([left], [right]) => left.localeCompare(right));
+  const aliases = Object.entries(options.aliases);
   return [filePath, options.rootDir, ...options.sassLoadPaths, JSON.stringify(aliases)].join('\0');
 }
 
@@ -71,6 +71,7 @@ function trimCache(cacheLimit: number): void {
 }
 
 function remember(key: string, entry: CacheEntry, cacheLimit: number): void {
+  extractionCache.delete(key);
   extractionCache.set(key, entry);
   trimCache(cacheLimit);
 }

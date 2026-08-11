@@ -432,6 +432,29 @@ test('isolates Sass cache entries by explicit aliases', () => {
   });
 });
 
+test('keeps equal-priority Sass alias order in the cache key', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    const stylesheet = writeProjectFile(rootDir, 'src/entry.module.scss', [
+      "@use '@a/x' as theme;",
+      '.entry-#{theme.$name} { color: red; }',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'src/one/_x.scss', '$name: first;');
+    writeProjectFile(rootDir, 'src/two/_a.scss', '$name: second;');
+
+    const first = normalizeOptions({
+      aliases: { '@a/*': 'src/one/*', '@*/x': 'src/two/*' },
+    }, rootDir);
+    const second = normalizeOptions({
+      aliases: { '@*/x': 'src/two/*', '@a/*': 'src/one/*' },
+    }, rootDir);
+
+    assert.equal(extractClasses(stylesheet, first)?.classes.has('entry-first'), true);
+    assert.equal(extractClasses(stylesheet, second)?.classes.has('entry-first'), false);
+    assert.equal(extractClasses(stylesheet, second)?.classes.has('entry-second'), true);
+  });
+});
+
 test('finds unused local classes and preserves dynamic module access', () => {
   const rootDir = fixture('unused');
   const result = findUnusedClasses({ rootDir });
@@ -823,6 +846,28 @@ test('retains recently used stylesheets in the extraction cache', () => {
   });
 });
 
+test('refreshes invalidated stylesheets in the extraction cache', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    const options = normalizeOptions({ cacheLimit: 2 }, rootDir);
+    const first = writeProjectFile(rootDir, 'first.module.css', '.first {}');
+    const second = writeProjectFile(rootDir, 'second.module.css', '.second {}');
+    const third = writeProjectFile(rootDir, 'third.module.css', '.third {}');
+
+    assert.equal(extractClasses(first, options)?.classes.has('first'), true);
+    assert.equal(extractClasses(second, options)?.classes.has('second'), true);
+    writeProjectFile(rootDir, 'first.module.css', '.first-updated {}');
+    assert.equal(extractClasses(first, options)?.classes.has('first-updated'), true);
+    assert.equal(extractClasses(third, options)?.classes.has('third'), true);
+
+    const cacheKeys = getExtractionCacheKeys();
+    assert.equal(cacheKeys.length, 2);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${first}\0`)), true);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${second}\0`)), false);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${third}\0`)), true);
+  });
+});
+
 test('scans supported source files conservatively and ignores unsafe paths', () => {
   withTemporaryProject((rootDir) => {
     const extensionStyles = writeProjectFile(rootDir, 'extension.module.css', '.used {}');
@@ -990,19 +1035,26 @@ test('reports unknown CSS Module classes in static destructuring', async () => {
       '({ primray: assigned } = styles);',
       'const { missing: directMissing } = styles;',
       'const { root: { ignored } } = styles;',
+      'const { root: { nestedIgnored } = fallback } = styles;',
       'const { ignored: ignoredFromCall } = getStyles();',
-      'function render(styles) { const { missing } = styles; }',
+      'function render({ primray } = styles) {}',
+      'const renderArrow = ({ primray } = styles) => {};',
+      'const renderExpression = function ({ primray } = styles) {};',
+      'function renderShadow(styles) { const { missing } = styles; }',
       'const { missing } = another;',
     ].join('\n'), source, {}, rootDir);
 
-    assert.equal(messages.length, 3);
+    assert.equal(messages.length, 6);
     assert.deepEqual(messages.map((message) => message.messageId), [
       'unknownClass',
       'unknownClass',
       'unknownClass',
+      'unknownClass',
+      'unknownClass',
+      'unknownClass',
     ]);
-    assert.equal(messages.filter((message) => /Unknown CSS Module class "primray"/.test(message.message)).length, 2);
-    assert.equal(messages.filter((message) => /Did you mean styles\.primary\?/.test(message.message)).length, 2);
+    assert.equal(messages.filter((message) => /Unknown CSS Module class "primray"/.test(message.message)).length, 5);
+    assert.equal(messages.filter((message) => /Did you mean styles\.primary\?/.test(message.message)).length, 5);
     assert.ok(messages.some((message) => /Unknown CSS Module class "missing"/.test(message.message)));
     assert.ok(messages.some((message) => !/Did you mean/.test(message.message)));
   } finally {
