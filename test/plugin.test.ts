@@ -303,6 +303,7 @@ test('recognizes ICSS exports without treating imports as module properties', as
       ':export {',
       '  brandColor: $brand;',
       '  brand-color: $brand;',
+      '  accent-color: $brand;',
       '  breakpointMd: $bp-md;',
       '}',
       '.root { color: red; }',
@@ -326,7 +327,7 @@ test('recognizes ICSS exports without treating imports as module properties', as
 
     const camelCaseMessages = await lint([
       "import styles from './vars.module.scss';",
-      'styles.brandColor;',
+      'styles.accentColor;',
     ].join('\n'), source, { localsConvention: 'camelCaseOnly' }, rootDir);
     assert.deepEqual(camelCaseMessages, []);
 
