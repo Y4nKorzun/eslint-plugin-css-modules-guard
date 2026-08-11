@@ -1,0 +1,5 @@
+@use '@/shared/styles' as shared;
+
+.alias {
+  color: shared.$color;
+}

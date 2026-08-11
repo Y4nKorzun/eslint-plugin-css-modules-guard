@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 import { findUnusedClasses, relativeUnusedClasses } from './core/unused.js';
@@ -117,7 +117,15 @@ export function runCli(args: readonly string[], write: (output: string) => void 
   try {
     const parsed = parseArguments(args);
     const rootDir = realpathSync(resolve(parsed.rootDir));
-    const unused = relativeUnusedClasses(rootDir, findUnusedClasses({ ...parsed, rootDir }));
+    const result = findUnusedClasses({ ...parsed, rootDir });
+    if (result.incomplete) {
+      write(parsed.format === 'json'
+        ? JSON.stringify({ unused: [], incomplete: true }, undefined, 2)
+        : 'Unable to complete unused CSS Module class scan.');
+      return 2;
+    }
+
+    const unused = relativeUnusedClasses(rootDir, result.unused);
 
     if (parsed.format === 'json') {
       write(JSON.stringify({ unused }, undefined, 2));
@@ -139,8 +147,16 @@ export function runCliFromProcess(
   argv: readonly string[],
   write?: (output: string) => void,
 ): void {
-  if (argv[1] && moduleUrl === pathToFileURL(argv[1]).href) {
+  if (argv[1] && isCliEntrypoint(moduleUrl, argv[1])) {
     process.exitCode = runCli(argv.slice(2), write);
+  }
+}
+
+function isCliEntrypoint(moduleUrl: string, entryPath: string): boolean {
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entryPath);
+  } catch {
+    return false;
   }
 }
 

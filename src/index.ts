@@ -1,4 +1,5 @@
 import { noUnknownClass } from './rules/no-unknown-class.js';
+import { unresolvableStylesheet } from './rules/unresolvable-stylesheet.js';
 
 interface CssModulesPlugin {
   meta: {
@@ -7,6 +8,7 @@ interface CssModulesPlugin {
   };
   rules: {
     'no-unknown-class': typeof noUnknownClass;
+    'unresolvable-stylesheet': typeof unresolvableStylesheet;
   };
   configs: {
     recommended: {
@@ -15,6 +17,7 @@ interface CssModulesPlugin {
       };
       rules: {
         'css-modules/no-unknown-class': 'error';
+        'css-modules/unresolvable-stylesheet': 'error';
       };
     };
   };
@@ -23,10 +26,11 @@ interface CssModulesPlugin {
 const plugin: CssModulesPlugin = {
   meta: {
     name: 'eslint-plugin-css-modules-guard',
-    version: '0.4.0',
+    version: '0.6.0',
   },
   rules: {
     'no-unknown-class': noUnknownClass,
+    'unresolvable-stylesheet': unresolvableStylesheet,
   },
   configs: {} as CssModulesPlugin['configs'],
 };
@@ -37,9 +41,10 @@ plugin.configs.recommended = {
   },
   rules: {
     'css-modules/no-unknown-class': 'error',
+    'css-modules/unresolvable-stylesheet': 'error',
   },
 };
 
 export default plugin;
-export { noUnknownClass };
+export { noUnknownClass, unresolvableStylesheet };
 export type { CssModulesOptions, ExtractionResult, LocalsConvention } from './core/types.js';

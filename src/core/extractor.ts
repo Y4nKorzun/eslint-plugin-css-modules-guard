@@ -7,7 +7,7 @@ import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import * as sass from 'sass';
 
-import { isInside, isSafeProjectFile, resolveStylesheet } from './resolver.js';
+import { isInside, isSafeProjectFile, resolveAliasedPaths, resolveStylesheet } from './resolver.js';
 import type { ExtractionResult, ExtractorOptions, LocalsConvention } from './types.js';
 
 interface Composition {
@@ -163,12 +163,50 @@ function pathFromCustomSassUrl(url: URL): string | undefined {
   }
 }
 
+interface ResolvedSassReference {
+  candidate: string;
+  importer: string;
+  specifier: string;
+}
+
+function resolvedSassReference(
+  url: string,
+  entryPath: string,
+  resolvedFiles: ReadonlySet<string>,
+): ResolvedSassReference | undefined {
+  const parsedUrl = new URL(url);
+  const candidate = parsedUrl.protocol === 'file:'
+    ? fileURLToPath(parsedUrl)
+    : pathFromCustomSassUrl(parsedUrl)!;
+
+  const sourceFiles = parsedUrl.protocol === 'file:' ? [entryPath] : [...resolvedFiles];
+  const importer = sourceFiles
+    .filter((source) => isInsideOrEqual(dirname(source), candidate))
+    .sort((left, right) => right.length - left.length)[0];
+  if (!importer) {
+    return undefined;
+  }
+
+  const specifier = relative(dirname(importer), candidate);
+  if (!specifier || specifier === '..' || specifier.startsWith(`..${sep}`)) {
+    return undefined;
+  }
+
+  return { candidate, importer, specifier };
+}
+
 export function safeSassImporter(
   entryPath: string,
   options: ExtractorOptions,
   dependencies: Set<string>,
 ): sass.Importer<'sync'> {
   const loadPaths = safeLoadPaths(options);
+  const resolvedFiles = new Set([entryPath]);
+  const rememberSassFile = (safeFile: string): URL => {
+    dependencies.add(safeFile);
+    resolvedFiles.add(safeFile);
+    return customSassUrl(safeFile);
+  };
 
   return {
     canonicalize(url, context) {
@@ -178,11 +216,9 @@ export function safeSassImporter(
           throw new Error('Sass imports must stay inside the project root.');
         }
         const safeFile = resolveSafeSassFile(candidate, options);
-        if (!safeFile) {
-          throw new Error('Unable to resolve a local Sass import.');
+        if (safeFile) {
+          return rememberSassFile(safeFile);
         }
-        dependencies.add(safeFile);
-        return customSassUrl(safeFile);
       }
 
       if (url.startsWith('sass:')) {
@@ -191,17 +227,34 @@ export function safeSassImporter(
 
       let localCandidate: string;
       let resolvingDirectory = dirname(entryPath);
+      let resolvingFile = entryPath;
+      let normalizedReference: ResolvedSassReference | undefined;
       if (url.startsWith('file:')) {
-        localCandidate = fileURLToPath(url);
+        normalizedReference = resolvedSassReference(url, entryPath, resolvedFiles);
+        localCandidate = normalizedReference?.candidate ?? fileURLToPath(url);
+        if (normalizedReference) {
+          resolvingFile = normalizedReference.importer;
+          resolvingDirectory = dirname(resolvingFile);
+        }
+      } else if (url.startsWith(SAFE_SASS_URL_SCHEME)) {
+        normalizedReference = resolvedSassReference(url, entryPath, resolvedFiles);
+        if (!normalizedReference) {
+          throw new Error('Unable to resolve a local Sass import.');
+        }
+        localCandidate = normalizedReference.candidate;
+        resolvingFile = normalizedReference.importer;
+        resolvingDirectory = dirname(resolvingFile);
       } else if (context.containingUrl?.protocol === SAFE_SASS_URL_SCHEME) {
         const containingFile = pathFromCustomSassUrl(context.containingUrl);
         if (!containingFile) {
           throw new Error('Unable to resolve a Sass import.');
         }
         resolvingDirectory = dirname(containingFile);
+        resolvingFile = containingFile;
         localCandidate = resolve(resolvingDirectory, url);
       } else if (context.containingUrl?.protocol === 'file:') {
-        resolvingDirectory = dirname(fileURLToPath(context.containingUrl));
+        resolvingFile = fileURLToPath(context.containingUrl);
+        resolvingDirectory = dirname(resolvingFile);
         localCandidate = resolve(resolvingDirectory, url);
       } else if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
         throw new Error('Only local Sass imports are supported.');
@@ -213,17 +266,24 @@ export function safeSassImporter(
         throw new Error('Sass imports must stay inside the project root.');
       }
 
-      const candidates = [localCandidate];
+      const specifier = normalizedReference?.specifier ?? url;
+      const aliases = !specifier.startsWith('.') && !specifier.startsWith('file:')
+        ? resolveAliasedPaths(resolvingFile, specifier, options)
+        : { candidates: [], dependencies: [] };
+      for (const dependency of aliases.dependencies) {
+        dependencies.add(dependency);
+      }
+
+      const candidates = [...aliases.candidates, localCandidate];
       const loadPathReference = relative(resolvingDirectory, localCandidate);
       if (!loadPathReference.startsWith(`..${sep}`) && loadPathReference !== '..') {
         candidates.push(...loadPaths.map((loadPath) => resolve(loadPath, loadPathReference)));
       }
 
-      for (const candidate of candidates) {
+      for (const candidate of new Set(candidates)) {
         const safeFile = resolveSafeSassFile(candidate, options);
         if (safeFile) {
-          dependencies.add(safeFile);
-          return customSassUrl(safeFile);
+          return rememberSassFile(safeFile);
         }
       }
 

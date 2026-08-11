@@ -14,6 +14,12 @@ interface AliasMapping {
 interface TsconfigAliases {
   baseDir: string;
   mappings: AliasMapping[];
+  dependencies: string[];
+}
+
+export interface AliasResolution {
+  candidates: string[];
+  dependencies: string[];
 }
 
 const CSS_MODULE_SUFFIX = /\.module\.(?:css|scss|sass)$/i;
@@ -137,18 +143,29 @@ function readTsconfigAliases(
     const parent = parentPath
       ? readTsconfigAliases(parentPath, rootDir, nextVisited)
       : undefined;
-    const referencedMappings = localReferencedConfigs(config.references, safeConfig, rootDir).flatMap(
-      (referencePath) => readTsconfigAliases(referencePath, rootDir, nextVisited)?.mappings ?? [],
+    const references = localReferencedConfigs(config.references, safeConfig, rootDir).flatMap(
+      (referencePath) => {
+        const referenced = readTsconfigAliases(referencePath, rootDir, nextVisited);
+        return referenced ? [referenced] : [];
+      },
     );
     const ownBaseUrl = config.compilerOptions?.baseUrl;
     const baseDir = typeof ownBaseUrl === 'string'
       ? resolve(dirname(safeConfig), ownBaseUrl)
       : parent?.baseDir ?? dirname(safeConfig);
     const rawPaths = config.compilerOptions?.paths;
-    const inheritedMappings = [...(parent?.mappings ?? []), ...referencedMappings];
+    const inheritedMappings = [
+      ...(parent?.mappings ?? []),
+      ...references.flatMap((reference) => reference.mappings),
+    ];
+    const dependencies = [...new Set([
+      safeConfig,
+      ...(parent?.dependencies ?? []),
+      ...references.flatMap((reference) => reference.dependencies),
+    ])];
 
     if (!rawPaths || typeof rawPaths !== 'object' || Array.isArray(rawPaths)) {
-      return { baseDir, mappings: inheritedMappings };
+      return { baseDir, mappings: inheritedMappings, dependencies };
     }
 
     const mappings = Object.entries(rawPaths).flatMap(([key, targets]) =>
@@ -156,15 +173,15 @@ function readTsconfigAliases(
         ? targets.flatMap((target) => typeof target === 'string' ? [{ key, target, baseDir }] : [])
         : [],
     );
-    return { baseDir, mappings: [...inheritedMappings, ...mappings] };
+    return { baseDir, mappings: [...inheritedMappings, ...mappings], dependencies };
   } catch {
     return undefined;
   }
 }
 
-function tsconfigAliases(importer: string, rootDir: string): AliasMapping[] {
+function tsconfigAliases(importer: string, rootDir: string): TsconfigAliases | undefined {
   const configPath = findNearestTsconfig(importer, rootDir);
-  return configPath ? readTsconfigAliases(configPath, rootDir)?.mappings ?? [] : [];
+  return configPath ? readTsconfigAliases(configPath, rootDir) : undefined;
 }
 
 function explicitAliases(options: ExtractorOptions): AliasMapping[] {
@@ -198,12 +215,17 @@ function aliasRemainder(specifier: string, key: string): string | undefined {
   return undefined;
 }
 
-function resolveAlias(
+function isInsideOrEqual(rootDir: string, candidate: string): boolean {
+  return candidate === rootDir || isInside(rootDir, candidate);
+}
+
+function resolveAliasCandidates(
   specifier: string,
   mappings: AliasMapping[],
   rootDir: string,
-): string | undefined {
+): string[] {
   const orderedMappings = [...mappings].sort((left, right) => right.key.length - left.key.length);
+  const candidates: string[] = [];
 
   for (const mapping of orderedMappings) {
     const remainder = aliasRemainder(specifier, mapping.key);
@@ -215,13 +237,28 @@ function resolveAlias(
     const candidate = remainder && !mapping.target.includes('*')
       ? join(mapping.baseDir, target, remainder)
       : resolve(mapping.baseDir, target);
-    const resolved = isSafeProjectFile(candidate, rootDir);
-    if (resolved) {
-      return resolved;
+    if (isInsideOrEqual(rootDir, candidate)) {
+      candidates.push(candidate);
     }
   }
 
-  return undefined;
+  return [...new Set(candidates)];
+}
+
+export function resolveAliasedPaths(
+  importer: string,
+  specifier: string,
+  options: ExtractorOptions,
+): AliasResolution {
+  const tsconfig = tsconfigAliases(importer, options.rootDir);
+  return {
+    candidates: resolveAliasCandidates(
+      specifier,
+      [...explicitAliases(options), ...(tsconfig?.mappings ?? [])],
+      options.rootDir,
+    ),
+    dependencies: tsconfig?.dependencies ?? [],
+  };
 }
 
 export function resolveStylesheet(
@@ -239,13 +276,13 @@ export function resolveStylesheet(
   }
 
   const rootDir = options.rootDir;
-  const candidate = specifier.startsWith('.')
-    ? isSafeProjectFile(resolve(dirname(importer), specifier), rootDir)
-    : resolveAlias(
-        specifier,
-        [...explicitAliases(options), ...tsconfigAliases(importer, rootDir)],
-        rootDir,
-      );
+  const candidates = specifier.startsWith('.')
+    ? [resolve(dirname(importer), specifier)]
+    : resolveAliasedPaths(importer, specifier, options).candidates;
+  const candidate = candidates.flatMap((path) => {
+    const safeFile = isSafeProjectFile(path, rootDir);
+    return safeFile ? [safeFile] : [];
+  })[0];
 
   return candidate ? { path: candidate } : undefined;
 }
