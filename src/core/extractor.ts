@@ -16,6 +16,7 @@ interface Composition {
 }
 
 interface ParsedStylesheet {
+  exportedValues: string[];
   rawClasses: string[];
   globalClasses: string[];
   compositions: Map<string, Composition[]>;
@@ -376,9 +377,17 @@ function parseStylesheet(css: string, filePath: string): ParsedStylesheet | unde
     const root = postcss.parse(css, { from: filePath });
     const rawClasses = new Set<string>();
     const globalClasses = new Set<string>();
+    const exportedValues = new Set<string>();
     const compositions = new Map<string, Composition[]>();
 
     root.walkRules((rule) => {
+      if (rule.selector.trim() === ':export') {
+        rule.walkDecls((declaration) => {
+          exportedValues.add(declaration.prop);
+        });
+        return;
+      }
+
       const ruleClasses = new Set<string>();
       selectorParser((selectors) => {
         selectors.walkClasses((node) => {
@@ -406,7 +415,12 @@ function parseStylesheet(css: string, filePath: string): ParsedStylesheet | unde
       }
     });
 
-    return { rawClasses: [...rawClasses], globalClasses: [...globalClasses], compositions };
+    return {
+      rawClasses: [...rawClasses],
+      globalClasses: [...globalClasses],
+      exportedValues: [...exportedValues],
+      compositions,
+    };
   } catch {
     return undefined;
   }
@@ -573,6 +587,9 @@ function extractCssModule(
   };
 
   const classes = new Set<string>();
+  for (const exportedValue of parsed.exportedValues) {
+    addClassNames(classes, exportedValue, options.localsConvention);
+  }
   for (const className of parsed.globalClasses) {
     addClassNames(classes, className, options.localsConvention);
   }

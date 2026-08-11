@@ -21,7 +21,7 @@ styles.primray; // Unknown CSS Module class "primray". Did you mean styles.prima
 
 ## Rule: `css-modules/no-unknown-class`
 
-The rule checks default imports ending in `.module.css`, `.module.scss`, and `.module.sass`. It validates dot access, static bracket access, and static object destructuring. Dynamic computed keys are intentionally skipped; classes named in `:global()` are also allowed because they are outside the plugin's authority.
+The rule checks default imports ending in `.module.css`, `.module.scss`, and `.module.sass`. It validates dot access, static bracket access, static object destructuring, and exact ICSS `:export` values. Dynamic computed keys are intentionally skipped; classes named in `:global()` are also allowed because they are outside the plugin's authority. ICSS `:import` values are not module properties.
 
 ```js
 {
