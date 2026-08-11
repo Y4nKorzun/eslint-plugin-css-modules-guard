@@ -6,6 +6,7 @@ export interface CssModulesOptions {
   sassLoadPaths?: string[];
   suggestThreshold?: number;
   cache?: boolean;
+  cacheLimit?: number;
 }
 
 export interface ExtractorOptions {
@@ -15,6 +16,7 @@ export interface ExtractorOptions {
   sassLoadPaths: string[];
   suggestThreshold: number;
   cache: boolean;
+  cacheLimit: number;
 }
 
 export interface ExtractionResult {

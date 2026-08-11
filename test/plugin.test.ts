@@ -24,6 +24,7 @@ import {
   compileStylesheet,
   extractClasses,
   fingerprintDependencies,
+  getExtractionCacheKeys,
   propertyNamesForClass,
   safeSassImporter,
 } from '../src/core/extractor.js';
@@ -258,7 +259,10 @@ test('validates Sass and CSS Module semantics without false positives', async ()
     "sassStyles[`size_${size}`];",
     'flatStyles[key];',
     'sassStyles.buttno;',
-  ].join('\n'), fixture('semantics', 'View.js'), { localsConvention: 'camelCase' });
+  ].join('\n'), fixture('semantics', 'View.js'), {
+    localsConvention: 'camelCase',
+    cacheLimit: 2,
+  });
 
   assert.equal(messages.length, 1);
   assert.equal(messages[0]!.ruleId, 'css-modules/no-unknown-class');
@@ -307,7 +311,7 @@ test('reports unresolved and uncompilable CSS Modules separately', async () => {
     "import { root } from './basic.module.css';",
     "import './basic.module.css';",
     'styles.root;',
-  ].join('\n'), fixture('Component.js'), {}, repositoryRoot, 'unresolvable-stylesheet');
+  ].join('\n'), fixture('Component.js'), { cacheLimit: 2 }, repositoryRoot, 'unresolvable-stylesheet');
 
   assert.equal(messages.length, 2);
   assert.equal(messages[0]!.ruleId, 'css-modules/unresolvable-stylesheet');
@@ -402,6 +406,52 @@ test('invalidates the Sass cache when a tsconfig alias changes', () => {
     const extracted = extractClasses(stylesheet, options);
     assert.equal(extracted?.classes.has('entry-first'), false);
     assert.equal(extracted?.classes.has('entry-second'), true);
+  });
+});
+
+test('isolates Sass cache entries by explicit aliases', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    const stylesheet = writeProjectFile(rootDir, 'src/entry.module.scss', [
+      "@use '@theme' as theme;",
+      '.entry-#{theme.$name} { color: red; }',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'src/first/_theme.scss', '$name: first;');
+    writeProjectFile(rootDir, 'src/second/_theme.scss', '$name: second;');
+
+    const first = normalizeOptions({
+      aliases: { '@unused': 'src/unused', '@theme': 'src/first/theme' },
+    }, rootDir);
+    const second = normalizeOptions({
+      aliases: { '@unused': 'src/unused', '@theme': 'src/second/theme' },
+    }, rootDir);
+
+    assert.equal(extractClasses(stylesheet, first)?.classes.has('entry-first'), true);
+    assert.equal(extractClasses(stylesheet, second)?.classes.has('entry-first'), false);
+    assert.equal(extractClasses(stylesheet, second)?.classes.has('entry-second'), true);
+  });
+});
+
+test('keeps equal-priority Sass alias order in the cache key', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    const stylesheet = writeProjectFile(rootDir, 'src/entry.module.scss', [
+      "@use '@a/x' as theme;",
+      '.entry-#{theme.$name} { color: red; }',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'src/one/_x.scss', '$name: first;');
+    writeProjectFile(rootDir, 'src/two/_a.scss', '$name: second;');
+
+    const first = normalizeOptions({
+      aliases: { '@a/*': 'src/one/*', '@*/x': 'src/two/*' },
+    }, rootDir);
+    const second = normalizeOptions({
+      aliases: { '@*/x': 'src/two/*', '@a/*': 'src/one/*' },
+    }, rootDir);
+
+    assert.equal(extractClasses(stylesheet, first)?.classes.has('entry-first'), true);
+    assert.equal(extractClasses(stylesheet, second)?.classes.has('entry-first'), false);
+    assert.equal(extractClasses(stylesheet, second)?.classes.has('entry-second'), true);
   });
 });
 
@@ -745,15 +795,76 @@ test('fingerprints only safe, still-present stylesheet dependencies', () => {
   });
 });
 
-test('bounds the extraction cache with real stylesheet entries', () => {
+test('bounds the extraction cache by default and configured limit', () => {
   withTemporaryProject((rootDir) => {
     clearExtractionCache();
-    const options = normalizeOptions(undefined, rootDir);
+    const defaultOptions = normalizeOptions(undefined, rootDir);
+    assert.equal(defaultOptions.cacheLimit, 256);
 
     for (let index = 0; index <= 256; index += 1) {
       const stylesheet = writeProjectFile(rootDir, `cache/${index}.module.css`, `.item-${index} {}`);
-      assert.equal(extractClasses(stylesheet, options)?.classes.has(`item-${index}`), true);
+      assert.equal(extractClasses(stylesheet, defaultOptions)?.classes.has(`item-${index}`), true);
     }
+
+    assert.equal(getExtractionCacheKeys().length, 256);
+
+    const smallOptions = normalizeOptions({ cacheLimit: 2 }, rootDir);
+    assert.equal(smallOptions.cacheLimit, 2);
+    const cachedStylesheet = join(rootDir, 'cache/256.module.css');
+    assert.equal(extractClasses(cachedStylesheet, smallOptions)?.classes.has('item-256'), true);
+    assert.equal(getExtractionCacheKeys().length, 2);
+
+    for (let index = 0; index < 3; index += 1) {
+      const stylesheet = writeProjectFile(rootDir, `small-cache/${index}.module.css`, `.item-${index} {}`);
+      assert.equal(extractClasses(stylesheet, smallOptions)?.classes.has(`item-${index}`), true);
+    }
+
+    assert.equal(getExtractionCacheKeys().length, 2);
+    assert.equal(normalizeOptions({ cacheLimit: 0 }, rootDir).cacheLimit, 256);
+    assert.equal(normalizeOptions({ cacheLimit: 1.5 }, rootDir).cacheLimit, 256);
+  });
+});
+
+test('retains recently used stylesheets in the extraction cache', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    const options = normalizeOptions({ cacheLimit: 2 }, rootDir);
+    const first = writeProjectFile(rootDir, 'first.module.css', '.first {}');
+    const second = writeProjectFile(rootDir, 'second.module.css', '.second {}');
+    const third = writeProjectFile(rootDir, 'third.module.css', '.third {}');
+
+    assert.equal(extractClasses(first, options)?.classes.has('first'), true);
+    assert.equal(extractClasses(second, options)?.classes.has('second'), true);
+    assert.equal(extractClasses(first, options)?.classes.has('first'), true);
+    assert.equal(extractClasses(third, options)?.classes.has('third'), true);
+
+    const cacheKeys = getExtractionCacheKeys();
+    assert.equal(cacheKeys.length, 2);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${first}\0`)), true);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${second}\0`)), false);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${third}\0`)), true);
+  });
+});
+
+test('refreshes invalidated stylesheets in the extraction cache', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    const options = normalizeOptions({ cacheLimit: 2 }, rootDir);
+    const first = writeProjectFile(rootDir, 'first.module.css', '.first {}');
+    const second = writeProjectFile(rootDir, 'second.module.css', '.second {}');
+    const third = writeProjectFile(rootDir, 'third.module.css', '.third {}');
+
+    assert.equal(extractClasses(first, options)?.classes.has('first'), true);
+    assert.equal(extractClasses(second, options)?.classes.has('second'), true);
+    writeProjectFile(rootDir, 'first.module.css', '.first-updated {}');
+    assert.equal(extractClasses(first, options)?.classes.has('first-updated'), true);
+    assert.equal(extractClasses(third, options)?.classes.has('third'), true);
+
+    const cacheKeys = getExtractionCacheKeys();
+    assert.equal(cacheKeys.length, 2);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${first}\0`)), true);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${second}\0`)), false);
+    assert.equal(cacheKeys.some((key) => key.startsWith(`${third}\0`)), true);
   });
 });
 
@@ -908,6 +1019,49 @@ test('handles every static CSS Module access form and bounded suggestions', asyn
   }
 });
 
+test('reports unknown CSS Module classes in static destructuring', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'Component.js', 'export {};');
+    writeProjectFile(rootDir, 'classes.module.css', '.root {}\n.primary {}\n.kebab-case {}');
+
+    const messages = await lint([
+      "import styles from './classes.module.css';",
+      'const key = readKey();',
+      "const { root, primary: renamed, ['kebab-case']: kebab, [key]: dynamic, ...rest } = styles;",
+      'const { primray } = styles;',
+      'let assigned;',
+      '({ primray: assigned } = styles);',
+      'const { missing: directMissing } = styles;',
+      'const { root: { ignored } } = styles;',
+      'const { root: { nestedIgnored } = fallback } = styles;',
+      'const { ignored: ignoredFromCall } = getStyles();',
+      'function render({ primray } = styles) {}',
+      'const renderArrow = ({ primray } = styles) => {};',
+      'const renderExpression = function ({ primray } = styles) {};',
+      'function renderShadow(styles) { const { missing } = styles; }',
+      'const { missing } = another;',
+    ].join('\n'), source, {}, rootDir);
+
+    assert.equal(messages.length, 6);
+    assert.deepEqual(messages.map((message) => message.messageId), [
+      'unknownClass',
+      'unknownClass',
+      'unknownClass',
+      'unknownClass',
+      'unknownClass',
+      'unknownClass',
+    ]);
+    assert.equal(messages.filter((message) => /Unknown CSS Module class "primray"/.test(message.message)).length, 5);
+    assert.equal(messages.filter((message) => /Did you mean styles\.primary\?/.test(message.message)).length, 5);
+    assert.ok(messages.some((message) => /Unknown CSS Module class "missing"/.test(message.message)));
+    assert.ok(messages.some((message) => !/Did you mean/.test(message.message)));
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test('fails closed when ESLint cannot resolve the imported binding scope', () => {
   withTemporaryProject((rootDir) => {
     const source = writeProjectFile(rootDir, 'Component.js', 'export {};');
@@ -1012,6 +1166,7 @@ test('CLI covers valid flags, text output, and invalid input safely', () => {
       '--sass-load-path', 'sass',
       '--locals-convention', 'camelCase',
       '--no-cache',
+      '--cache-limit', '2',
     ], (line) => output.push(line)), 1);
     assert.deepEqual(output, ['unused.module.css: unused']);
 
@@ -1039,6 +1194,10 @@ test('CLI covers valid flags, text output, and invalid input safely', () => {
       ['check-unused', '--alias', 'key\0=target'],
       ['check-unused', '--alias', 'key=target\0'],
       ['check-unused', '--locals-convention', 'invalid'],
+      ['check-unused', '--cache-limit'],
+      ['check-unused', '--cache-limit', '0'],
+      ['check-unused', '--cache-limit', '1.5'],
+      ['check-unused', '--cache-limit', 'invalid'],
       ['check-unused', '--unknown'],
       ['check-unused', '--root', join(rootDir, 'missing')],
     ]) {

@@ -12,6 +12,7 @@ type OutputFormat = 'json' | 'text';
 interface CliArguments {
   aliases: Record<string, string>;
   cache: boolean;
+  cacheLimit?: number;
   format: OutputFormat;
   localsConvention: LocalsConvention;
   paths: string[];
@@ -30,6 +31,7 @@ function usage(): string {
     '  --sass-load-path <path>       Repeatable local Sass load path',
     '  --locals-convention <value>   asIs, camelCase, camelCaseOnly, or dashes',
     '  --no-cache                    Disable the in-memory extraction cache',
+    '  --cache-limit <count>         Max cached stylesheets (default: 256)',
   ].join('\n');
 }
 
@@ -105,6 +107,15 @@ function parseArguments(args: readonly string[]): CliArguments {
       case '--no-cache':
         parsed.cache = false;
         break;
+      case '--cache-limit': {
+        const cacheLimit = Number(nextValue(args, index, argument));
+        if (!Number.isSafeInteger(cacheLimit) || cacheLimit < 1) {
+          throw new Error('--cache-limit must be a positive integer.');
+        }
+        parsed.cacheLimit = cacheLimit;
+        index += 1;
+        break;
+      }
       default:
         throw new Error(`Unknown option: ${argument}`);
     }
