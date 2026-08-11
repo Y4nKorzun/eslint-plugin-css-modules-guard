@@ -3,6 +3,7 @@ import {
   chmodSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -39,6 +40,9 @@ import { noUnknownClass } from '../src/rules/no-unknown-class.js';
 import type { CssModulesOptions } from '../src/core/types.js';
 
 const repositoryRoot = resolve(process.cwd());
+const packageManifest = JSON.parse(
+  readFileSync(join(repositoryRoot, 'package.json'), 'utf8'),
+) as { bin: Record<string, string> };
 const fixture = (...segments: string[]): string => join(repositoryRoot, 'test', 'fixtures', ...segments);
 
 async function lint(
@@ -109,6 +113,10 @@ test('recommended config exposes the plugin rule', () => {
   assert.equal(plugin.meta.name, 'eslint-plugin-css-modules-guard');
   assert.equal(plugin.configs.recommended.plugins['css-modules'], plugin);
   assert.equal(plugin.configs.recommended.rules['css-modules/no-unknown-class'], 'error');
+});
+
+test('published CLI metadata uses an npm-valid bin path', () => {
+  assert.equal(packageManifest.bin['css-modules-lint'], 'dist/src/cli.js');
 });
 
 test('reports static unknown properties with a correction', async () => {

@@ -18,7 +18,7 @@
     }
   },
   "bin": {
-    "css-modules-lint": "./dist/src/cli.js"
+    "css-modules-lint": "dist/src/cli.js"
   },
   "files": [
     "dist/src",
