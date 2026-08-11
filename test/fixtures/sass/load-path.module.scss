@@ -1,0 +1,5 @@
+@use 'palette';
+
+.tone {
+  color: palette.$color;
+}

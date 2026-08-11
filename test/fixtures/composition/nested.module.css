@@ -1,0 +1,3 @@
+.nested {
+  composes: base from './base.module.css';
+}

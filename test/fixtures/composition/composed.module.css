@@ -1,0 +1,10 @@
+.local-base {}
+
+.local {
+  composes: local-base;
+  composes: nested from './nested.module.css';
+}
+
+.global-local {
+  composes: vendor from global;
+}

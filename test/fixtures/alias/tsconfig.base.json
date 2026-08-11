@@ -1,0 +1,9 @@
+{
+  // TypeScript's JSONC parser must handle standard tsconfig comments.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@styles/*": ["src/styles/*"]
+    }
+  }
+}

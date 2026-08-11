@@ -1,0 +1,39 @@
+@use 'tokens';
+
+$size: sm;
+
+%base {
+  color: tokens.$active-color;
+}
+
+@mixin generated($name) {
+  @if $name == sm {
+    .size_#{$name} {
+      display: block;
+    }
+  }
+}
+
+$spacing: (compact: 4px);
+
+.root {
+  &--active {
+    @extend %base;
+  }
+
+  .child {
+    color: blue;
+
+    &--deep {
+      color: green;
+    }
+  }
+}
+
+@include generated($size);
+
+@each $name, $value in $spacing {
+  .space-#{$name} {
+    margin: $value;
+  }
+}

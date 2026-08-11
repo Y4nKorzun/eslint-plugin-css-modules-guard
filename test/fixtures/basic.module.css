@@ -1,0 +1,5 @@
+.root {}
+.primary {}
+.kebab-case {}
+.root :global(.external) {}
+:global(.global-only) {}
