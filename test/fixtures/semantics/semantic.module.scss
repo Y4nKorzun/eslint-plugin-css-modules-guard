@@ -1,0 +1,25 @@
+.base {
+  color: red;
+}
+
+.notice {
+  @extend .base;
+}
+
+.button {
+  display: block;
+
+  &--active {
+    color: green;
+  }
+
+  .icon {
+    color: blue;
+  }
+}
+
+@each $size in sm, lg {
+  .size-#{$size} {
+    display: block;
+  }
+}

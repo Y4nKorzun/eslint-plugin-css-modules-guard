@@ -46,6 +46,7 @@ const repositoryRoot = resolve(process.cwd());
 const packageManifest = JSON.parse(
   readFileSync(join(repositoryRoot, 'package.json'), 'utf8'),
 ) as {
+  author: { name: string; url: string };
   bin: Record<string, string>;
   bugs: { url: string };
   homepage: string;
@@ -133,12 +134,24 @@ test('published CLI metadata uses an npm-valid bin path', () => {
 });
 
 test('published package links point to the source repository', () => {
+  assert.deepEqual(packageManifest.author, {
+    name: 'Y4nKorzun',
+    url: 'https://github.com/Y4nKorzun',
+  });
   assert.deepEqual(packageManifest.repository, {
     type: 'git',
     url: 'git+https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard.git',
   });
   assert.equal(packageManifest.bugs.url, 'https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/issues');
   assert.equal(packageManifest.homepage, 'https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard#readme');
+  assert.equal(
+    noUnknownClass.meta.docs?.url,
+    'https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modulesno-unknown-class',
+  );
+  assert.equal(
+    unresolvableStylesheet.meta.docs?.url,
+    'https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modulesunresolvable-stylesheet',
+  );
 });
 
 test('reports static unknown properties with a correction', async () => {
@@ -219,6 +232,60 @@ test('uses referenced tsconfig aliases for nested Sass imports', async () => {
   assert.equal(messages.length, 1);
   assert.equal(messages[0]!.ruleId, 'css-modules/no-unknown-class');
   assert.match(messages[0]!.message, /Unknown CSS Module class "alsi"/);
+});
+
+test('validates Sass and CSS Module semantics without false positives', async () => {
+  const messages = await lint([
+    "import sassStyles from './semantic.module.scss';",
+    "import composedStyles from './composition.module.css';",
+    "import flatStyles from './flat.module.css';",
+    'const size = readSize();',
+    'const key = readKey();',
+    'sassStyles.button;',
+    'sassStyles.buttonActive;',
+    'sassStyles.icon;',
+    'sassStyles.base;',
+    'sassStyles.notice;',
+    'sassStyles.sizeSm;',
+    'sassStyles.sizeLg;',
+    'composedStyles.localBase;',
+    'composedStyles.localComposed;',
+    'composedStyles.fromFile;',
+    'composedStyles.vendor;',
+    'composedStyles.externallyOwned;',
+    'composedStyles.kebabCase;',
+    'flatStyles.flatClass;',
+    "sassStyles[`size_${size}`];",
+    'flatStyles[key];',
+    'sassStyles.buttno;',
+  ].join('\n'), fixture('semantics', 'View.js'), { localsConvention: 'camelCase' });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]!.ruleId, 'css-modules/no-unknown-class');
+  assert.match(messages[0]!.message, /Unknown CSS Module class "buttno"/);
+});
+
+test('uses manual aliases for Sass without a tsconfig', async () => {
+  const rootDir = fixture('manual-alias');
+  const options = { aliases: { '~styles': 'src/styles' } };
+  const messages = await lint([
+    "import styles from './Aliased.module.scss';",
+    'styles.manual;',
+    'styles.maual;',
+  ].join('\n'), fixture('manual-alias', 'src', 'View.js'), options, rootDir);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]!.ruleId, 'css-modules/no-unknown-class');
+  assert.match(messages[0]!.message, /Unknown CSS Module class "maual"/);
+
+  const unresolvableMessages = await lint(
+    "import styles from './Aliased.module.scss';\nstyles.manual;",
+    fixture('manual-alias', 'src', 'View.js'),
+    options,
+    rootDir,
+    'unresolvable-stylesheet',
+  );
+  assert.deepEqual(unresolvableMessages, []);
 });
 
 test('skips an unresolvable Sass interpolation instead of reporting a false positive', async () => {

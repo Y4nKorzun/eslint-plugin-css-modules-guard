@@ -1,0 +1,5 @@
+@use '~styles/tokens' as tokens;
+
+.manual {
+  color: tokens.$color;
+}
