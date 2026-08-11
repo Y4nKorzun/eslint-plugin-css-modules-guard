@@ -9,7 +9,7 @@ type Options = readonly [CssModulesOptions?];
 type MessageIds = 'unresolvableStylesheet';
 
 const createRule = ESLintUtils.RuleCreator(
-  (name) => `https://www.npmjs.com/package/eslint-plugin-css-modules-guard#${name}`,
+  (name) => `https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modules${name}`,
 );
 
 export const unresolvableStylesheet = createRule<Options, MessageIds>({

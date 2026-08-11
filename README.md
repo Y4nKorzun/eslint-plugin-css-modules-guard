@@ -38,6 +38,31 @@ The rule checks default imports ending in `.module.css`, `.module.scss`, and `.m
 
 The plugin reads `compilerOptions.paths` automatically from the nearest local `tsconfig.json`, including safe local project references, for CSS Module imports and local Sass `@use` / `@forward` paths. `camelCase` and `dashes` expose both the original and camel-cased property name; `camelCaseOnly` exposes only the latter.
 
+### Aliases from Vite or webpack
+
+The plugin intentionally does not read or execute Vite or webpack configuration. If an alias exists only there, repeat its local, project-root-relative mapping with the existing `aliases` option on both rules:
+
+```js
+// eslint.config.js
+import cssModules from 'eslint-plugin-css-modules-guard';
+
+const aliases = {
+  '~styles': 'src/styles',
+};
+
+export default [
+  cssModules.configs.recommended,
+  {
+    rules: {
+      'css-modules/no-unknown-class': ['error', { aliases }],
+      'css-modules/unresolvable-stylesheet': ['error', { aliases }],
+    },
+  },
+];
+```
+
+Without that mapping, `css-modules/unresolvable-stylesheet` correctly reports an aliased stylesheet or Sass import that cannot be resolved or compiled. This is a configuration gap, not a Sass false positive.
+
 When a close class name exists, ESLint receives a suggestion that replaces the whole access expression. Editors can apply it in one click; the plugin never applies the change automatically.
 
 ## Rule: `css-modules/unresolvable-stylesheet`
@@ -62,4 +87,4 @@ It exits `1` when unused classes are found and `0` otherwise. A dynamic module a
 - Performs no writes, subprocess execution, `eval`, or configuration execution. `tsconfig.json` is parsed as data.
 - Keeps at most 256 content-hash-validated entries in memory; it never creates a cache file.
 
-CSS-in-JS, webpack-loader integration, and composition from npm packages are intentionally out of scope.
+CSS-in-JS, automatic Vite/webpack configuration parsing, webpack-loader integration, and composition from npm packages are intentionally out of scope.

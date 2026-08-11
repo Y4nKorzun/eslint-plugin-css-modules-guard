@@ -1,0 +1,17 @@
+.local-base {}
+
+.local-composed {
+  composes: local-base;
+}
+
+.file-composed {
+  composes: from-file from './base.module.css';
+}
+
+.global-composed {
+  composes: vendor from global;
+}
+
+:global(.externally-owned) {}
+
+.kebab-case {}
