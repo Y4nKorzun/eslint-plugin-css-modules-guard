@@ -22,7 +22,7 @@ export interface AliasResolution {
   dependencies: string[];
 }
 
-const CSS_MODULE_SUFFIX = /\.module\.(?:css|scss|sass)$/i;
+const CSS_MODULE_SUFFIX = /\.module\.(?:css|scss|sass|less)$/i;
 
 export function isCssModuleSpecifier(specifier: string): boolean {
   return CSS_MODULE_SUFFIX.test(specifier);
@@ -36,6 +36,34 @@ export function isInside(rootDir: string, candidate: string): boolean {
     !pathFromRoot.startsWith(`..${sep}`) &&
     !isAbsolute(pathFromRoot)
   );
+}
+
+export function isInsideOrEqual(rootDir: string, candidate: string): boolean {
+  return candidate === rootDir || isInside(rootDir, candidate);
+}
+
+/** Local directories a compiler may search, after the same containment checks as any read. */
+export function safeLoadPaths(options: ExtractorOptions): string[] {
+  return options.sassLoadPaths.flatMap((loadPath) => {
+    try {
+      const candidate = isAbsolute(loadPath)
+        ? loadPath
+        : resolve(options.rootDir, loadPath);
+      const realPath = realpathSync(candidate);
+
+      if (
+        !statSync(realPath).isDirectory() ||
+        !isInsideOrEqual(options.rootDir, realPath) ||
+        realPath.split(sep).includes('node_modules')
+      ) {
+        return [];
+      }
+
+      return [realPath];
+    } catch {
+      return [];
+    }
+  });
 }
 
 export function isSafeProjectFile(candidate: string, rootDir: string): string | undefined {
@@ -56,8 +84,8 @@ export function isSafeProjectFile(candidate: string, rootDir: string): string | 
   }
 }
 
-function findNearestTsconfig(importer: string, rootDir: string): string | undefined {
-  let current = dirname(importer);
+function findNearestTsconfig(directory: string, rootDir: string): string | undefined {
+  let current = directory;
 
   while (current === rootDir || isInside(rootDir, current)) {
     const config = join(current, 'tsconfig.json');
@@ -179,8 +207,8 @@ function readTsconfigAliases(
   }
 }
 
-function tsconfigAliases(importer: string, rootDir: string): TsconfigAliases | undefined {
-  const configPath = findNearestTsconfig(importer, rootDir);
+function tsconfigAliases(directory: string, rootDir: string): TsconfigAliases | undefined {
+  const configPath = findNearestTsconfig(directory, rootDir);
   return configPath ? readTsconfigAliases(configPath, rootDir) : undefined;
 }
 
@@ -215,10 +243,6 @@ function aliasRemainder(specifier: string, key: string): string | undefined {
   return undefined;
 }
 
-function isInsideOrEqual(rootDir: string, candidate: string): boolean {
-  return candidate === rootDir || isInside(rootDir, candidate);
-}
-
 function resolveAliasCandidates(
   specifier: string,
   mappings: AliasMapping[],
@@ -245,12 +269,13 @@ function resolveAliasCandidates(
   return [...new Set(candidates)];
 }
 
-export function resolveAliasedPaths(
-  importer: string,
+/** Alias resolution anchored at a directory, for compilers that report an importing directory. */
+export function resolveAliasedPathsFrom(
+  directory: string,
   specifier: string,
   options: ExtractorOptions,
 ): AliasResolution {
-  const tsconfig = tsconfigAliases(importer, options.rootDir);
+  const tsconfig = tsconfigAliases(directory, options.rootDir);
   return {
     candidates: resolveAliasCandidates(
       specifier,
@@ -259,6 +284,14 @@ export function resolveAliasedPaths(
     ),
     dependencies: tsconfig?.dependencies ?? [],
   };
+}
+
+export function resolveAliasedPaths(
+  importer: string,
+  specifier: string,
+  options: ExtractorOptions,
+): AliasResolution {
+  return resolveAliasedPathsFrom(dirname(importer), specifier, options);
 }
 
 export function resolveStylesheet(

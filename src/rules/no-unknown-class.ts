@@ -3,6 +3,7 @@ import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
 import { extractClasses } from '../core/extractor.js';
 import { normalizeOptions } from '../core/options.js';
 import { isCssModuleSpecifier, resolveStylesheet } from '../core/resolver.js';
+import { cssModulesOptionsSchema } from '../core/schema.js';
 import type { CssModulesOptions, ExtractionResult } from '../core/types.js';
 
 type Options = readonly [CssModulesOptions?];
@@ -156,36 +157,7 @@ export const noUnknownClass = createRule<Options, MessageIds>({
     docs: {
       description: 'Require CSS Module properties to exist in the source stylesheet.',
     },
-    schema: [
-      {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          localsConvention: {
-            type: 'string',
-            enum: ['asIs', 'camelCase', 'camelCaseOnly', 'dashes'],
-          },
-          aliases: {
-            type: 'object',
-            additionalProperties: { type: 'string' },
-          },
-          sassLoadPaths: {
-            type: 'array',
-            items: { type: 'string' },
-          },
-          suggestThreshold: {
-            type: 'integer',
-            minimum: 0,
-            maximum: 10,
-          },
-          cache: { type: 'boolean' },
-          cacheLimit: {
-            type: 'integer',
-            minimum: 1,
-          },
-        },
-      },
-    ],
+    schema: cssModulesOptionsSchema,
     messages: {
       suggestedClass: 'Replace with "{{suggestion}}".',
       unknownClass: 'Unknown CSS Module class "{{className}}" in "{{stylesheet}}".{{suggestion}}',

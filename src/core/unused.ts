@@ -5,7 +5,7 @@ import ts from 'typescript';
 
 import { extractClasses, usedLocalClasses } from './extractor.js';
 import { normalizeOptions } from './options.js';
-import { isCssModuleSpecifier, isInside, resolveStylesheet } from './resolver.js';
+import { isCssModuleSpecifier, isInsideOrEqual, resolveStylesheet } from './resolver.js';
 import type { CssModulesOptions, ExtractorOptions } from './types.js';
 
 export interface UnusedCheckOptions extends CssModulesOptions {
@@ -45,14 +45,6 @@ function isSourceFile(filePath: string): boolean {
   return SOURCE_EXTENSIONS.has(extname(filePath).toLowerCase());
 }
 
-function isCssModuleFile(filePath: string): boolean {
-  return /\.module\.(?:css|scss|sass)$/i.test(filePath);
-}
-
-function isInsideOrEqual(rootDir: string, candidate: string): boolean {
-  return candidate === rootDir || isInside(rootDir, candidate);
-}
-
 function collectFiles(
   rootDir: string,
   requestedPaths: readonly string[] | undefined,
@@ -84,7 +76,7 @@ function collectFiles(
         const entryPath = join(realPath, entry.name);
         if (entry.isDirectory()) {
           visit(entryPath);
-        } else if (entry.isFile() && (isSourceFile(entryPath) || isCssModuleFile(entryPath))) {
+        } else if (entry.isFile() && (isSourceFile(entryPath) || isCssModuleSpecifier(entryPath))) {
           files.push(entryPath);
         }
       }
@@ -98,7 +90,7 @@ function collectFiles(
       ? requestedPath
       : resolve(rootDir, requestedPath);
     try {
-      if (isCssModuleFile(candidate) || isSourceFile(candidate)) {
+      if (isCssModuleSpecifier(candidate) || isSourceFile(candidate)) {
         const realPath = realpathSync(candidate);
         if (isInsideOrEqual(rootDir, realPath)) {
           files.push(realPath);
@@ -234,7 +226,7 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResul
   const options = normalizeOptions(ruleOptions, rootDir);
   const collection = collectFiles(rootDir, paths);
   const { files } = collection;
-  const stylesheets = files.filter(isCssModuleFile);
+  const stylesheets = files.filter(isCssModuleSpecifier);
   const usages = new Map<string, Usage>();
   let scanWasIncomplete = collection.incomplete;
 

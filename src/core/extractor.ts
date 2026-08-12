@@ -1,13 +1,19 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import * as sass from 'sass';
 
-import { isInside, isSafeProjectFile, resolveAliasedPaths, resolveStylesheet } from './resolver.js';
+import {
+  isInsideOrEqual,
+  isSafeProjectFile,
+  resolveAliasedPaths,
+  resolveStylesheet,
+  safeLoadPaths,
+} from './resolver.js';
 import type { ExtractionResult, ExtractorOptions, LocalsConvention } from './types.js';
 
 interface Composition {
@@ -77,33 +83,6 @@ function remember(key: string, entry: CacheEntry, cacheLimit: number): void {
   extractionCache.delete(key);
   extractionCache.set(key, entry);
   trimCache(cacheLimit);
-}
-
-function safeLoadPaths(options: ExtractorOptions): string[] {
-  return options.sassLoadPaths.flatMap((loadPath) => {
-    try {
-      const candidate = isAbsolute(loadPath)
-        ? loadPath
-        : resolve(options.rootDir, loadPath);
-      const realPath = realpathSync(candidate);
-
-      if (
-        !statSync(realPath).isDirectory() ||
-        (realPath !== options.rootDir && !isInside(options.rootDir, realPath)) ||
-        realPath.split(sep).includes('node_modules')
-      ) {
-        return [];
-      }
-
-      return [realPath];
-    } catch {
-      return [];
-    }
-  });
-}
-
-function isInsideOrEqual(rootDir: string, candidate: string): boolean {
-  return candidate === rootDir || isInside(rootDir, candidate);
 }
 
 function sassSyntax(filePath: string): sass.Syntax {
