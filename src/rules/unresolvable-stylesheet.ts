@@ -1,13 +1,14 @@
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
 
-import { extractClasses } from '../core/extractor.js';
+import { extractClasses, stylesheetLanguage } from '../core/extractor.js';
+import { isLessAvailable } from '../core/less-compiler.js';
 import { normalizeOptions } from '../core/options.js';
 import { isCssModuleSpecifier, resolveStylesheet } from '../core/resolver.js';
 import { cssModulesOptionsSchema } from '../core/schema.js';
 import type { CssModulesOptions } from '../core/types.js';
 
 type Options = readonly [CssModulesOptions?];
-type MessageIds = 'unresolvableStylesheet';
+type MessageIds = 'unresolvableStylesheet' | 'missingLessCompiler';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) => `https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modules${name}`,
@@ -23,6 +24,8 @@ export const unresolvableStylesheet = createRule<Options, MessageIds>({
     schema: cssModulesOptionsSchema,
     messages: {
       unresolvableStylesheet: 'Unable to {{action}} CSS Module "{{stylesheet}}".',
+      missingLessCompiler:
+        'Unable to compile CSS Module "{{stylesheet}}". Install the optional peer dependency "less" to lint .module.less files.',
     },
   },
   defaultOptions: [{}],
@@ -46,6 +49,17 @@ export const unresolvableStylesheet = createRule<Options, MessageIds>({
 
           const stylesheet = resolveStylesheet(context.physicalFilename, specifier, options);
           if (stylesheet && extractClasses(stylesheet.path, options)) {
+            continue;
+          }
+
+          // A genuine Less compile error still gets the generic message; only an absent compiler
+          // earns the install hint.
+          if (stylesheet && stylesheetLanguage(stylesheet.path) === 'less' && !isLessAvailable()) {
+            context.report({
+              node: statement.source,
+              messageId: 'missingLessCompiler',
+              data: { stylesheet: specifier },
+            });
             continue;
           }
 

@@ -7,6 +7,7 @@ import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import * as sass from 'sass';
 
+import { compileLessStylesheet } from './less-compiler.js';
 import {
   isInsideOrEqual,
   isSafeProjectFile,
@@ -290,30 +291,79 @@ export function safeSassImporter(
   };
 }
 
+export type StylesheetLanguage = 'css' | 'less' | 'sass';
+
+export function stylesheetLanguage(filePath: string): StylesheetLanguage {
+  const extension = extname(filePath).toLowerCase();
+  if (extension === '.scss' || extension === '.sass') {
+    return 'sass';
+  }
+  if (extension === '.less') {
+    return 'less';
+  }
+
+  return 'css';
+}
+
+function compilePlainStylesheet(
+  filePath: string,
+  options: ExtractorOptions,
+): CompiledStylesheet | undefined {
+  const dependencies = fingerprintDependencies([filePath], options.rootDir);
+  return dependencies
+    ? { css: readFileSync(filePath, 'utf8'), dependencies, hasExtend: false }
+    : undefined;
+}
+
+function compileSassStylesheet(
+  filePath: string,
+  options: ExtractorOptions,
+): CompiledStylesheet | undefined {
+  const dependencies = new Set([filePath]);
+  const result = sass.compileString(readFileSync(filePath, 'utf8'), {
+    url: pathToFileURL(filePath),
+    importer: safeSassImporter(filePath, options, dependencies),
+    style: 'expanded',
+    syntax: sassSyntax(filePath),
+    logger: sass.Logger.silent,
+  });
+
+  const hasExtend = [...dependencies].some(
+    (dependency) => /\.(?:scss|sass)$/i.test(dependency) && /@extend\b/.test(readFileSync(dependency, 'utf8')),
+  );
+  const fingerprints = fingerprintDependencies([...dependencies], options.rootDir);
+  return fingerprints ? { css: result.css, dependencies: fingerprints, hasExtend } : undefined;
+}
+
+function compileLessStylesheetEntry(
+  filePath: string,
+  options: ExtractorOptions,
+): CompiledStylesheet | undefined {
+  const compiled = compileLessStylesheet(filePath, options);
+  if (!compiled) {
+    return undefined;
+  }
+
+  const hasExtend = [...compiled.dependencies].some(
+    (dependency) => /\.less$/i.test(dependency) && /:extend\s*\(/.test(readFileSync(dependency, 'utf8')),
+  );
+  const fingerprints = fingerprintDependencies([...compiled.dependencies], options.rootDir);
+  return fingerprints ? { css: compiled.css, dependencies: fingerprints, hasExtend } : undefined;
+}
+
 export function compileStylesheet(
   filePath: string,
   options: ExtractorOptions,
 ): CompiledStylesheet | undefined {
   try {
-    if (!/\.(?:scss|sass)$/i.test(filePath)) {
-      const dependencies = fingerprintDependencies([filePath], options.rootDir);
-      return dependencies ? { css: readFileSync(filePath, 'utf8'), dependencies, hasExtend: false } : undefined;
+    switch (stylesheetLanguage(filePath)) {
+      case 'sass':
+        return compileSassStylesheet(filePath, options);
+      case 'less':
+        return compileLessStylesheetEntry(filePath, options);
+      default:
+        return compilePlainStylesheet(filePath, options);
     }
-
-    const dependencies = new Set([filePath]);
-    const result = sass.compileString(readFileSync(filePath, 'utf8'), {
-      url: pathToFileURL(filePath),
-      importer: safeSassImporter(filePath, options, dependencies),
-      style: 'expanded',
-      syntax: sassSyntax(filePath),
-      logger: sass.Logger.silent,
-    });
-
-    const hasExtend = [...dependencies].some(
-      (dependency) => /\.(?:scss|sass)$/i.test(dependency) && /@extend\b/.test(readFileSync(dependency, 'utf8')),
-    );
-    const fingerprints = fingerprintDependencies([...dependencies], options.rootDir);
-    return fingerprints ? { css: result.css, dependencies: fingerprints, hasExtend } : undefined;
   } catch {
     return undefined;
   }

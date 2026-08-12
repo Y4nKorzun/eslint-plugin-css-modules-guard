@@ -1,0 +1,27 @@
+@import 'tokens';
+
+@size: sm;
+
+.root {
+  color: @active-color;
+
+  &--active {
+    display: block;
+  }
+
+  .child {
+    display: flex;
+
+    &--deep {
+      display: grid;
+    }
+  }
+}
+
+.size_@{size} {
+  width: 1px;
+}
+
+.space-compact {
+  .tone-mixin();
+}

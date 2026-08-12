@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -11,6 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -27,7 +29,9 @@ import {
   getExtractionCacheKeys,
   propertyNamesForClass,
   safeSassImporter,
+  stylesheetLanguage,
 } from '../src/core/extractor.js';
+import { safeLessFileManager, setLessLoader } from '../src/core/less-compiler.js';
 import { normalizeOptions } from '../src/core/options.js';
 import {
   isCssModuleSpecifier,
@@ -40,6 +44,7 @@ import plugin from '../src/index.js';
 import { noUnknownClass } from '../src/rules/no-unknown-class.js';
 import { noUnusedClass } from '../src/rules/no-unused-class.js';
 import { unresolvableStylesheet } from '../src/rules/unresolvable-stylesheet.js';
+import type { LessModule } from '../src/core/less-compiler.js';
 import type { CssModulesOptions } from '../src/core/types.js';
 
 type TestRule = 'no-unknown-class' | 'no-unused-class' | 'unresolvable-stylesheet';
@@ -54,8 +59,12 @@ const packageManifest = JSON.parse(
   homepage: string;
   repository: { type: string; url: string };
   version: string;
+  dependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
+  peerDependenciesMeta: Record<string, { optional?: boolean }>;
 };
 const fixture = (...segments: string[]): string => join(repositoryRoot, 'test', 'fixtures', ...segments);
+const installedLess = createRequire(import.meta.url)('less') as LessModule;
 
 async function lint(
   code: string,
@@ -541,6 +550,232 @@ test('uses manual aliases for Sass without a tsconfig', async () => {
   assert.deepEqual(unresolvableMessages, []);
 });
 
+test('compiles Less before collecting selectors', () => {
+  const options = normalizeOptions(undefined, repositoryRoot);
+  const extracted = extractClasses(fixture('less', 'features.module.less'), options);
+
+  assert.ok(extracted);
+  assert.deepEqual(
+    new Set(['root', 'root--active', 'child', 'child--deep', 'size_sm', 'space-compact']),
+    extracted.classes,
+  );
+  assert.equal(extracted.hasExtend, false);
+  assert.equal(stylesheetLanguage(fixture('less', 'features.module.less')), 'less');
+  assert.equal(stylesheetLanguage(fixture('basic.module.css')), 'css');
+});
+
+test('uses configured local load paths for Less', () => {
+  const stylesheet = fixture('less', 'load-path.module.less');
+  const viaLoadPaths = extractClasses(
+    stylesheet,
+    normalizeOptions({ loadPaths: ['test/fixtures/less/load-paths'] }, repositoryRoot),
+  );
+  const viaDeprecatedAlias = extractClasses(
+    stylesheet,
+    normalizeOptions({ sassLoadPaths: ['test/fixtures/less/load-paths'] }, repositoryRoot),
+  );
+
+  assert.ok(viaLoadPaths?.classes.has('tone'));
+  assert.ok(viaDeprecatedAlias?.classes.has('tone'));
+  assert.equal(extractClasses(stylesheet, normalizeOptions(undefined, repositoryRoot)), undefined);
+});
+
+test('checks Less CSS Modules through the rules', async () => {
+  const messages = await lint([
+    "import styles from './less/features.module.less';",
+    'styles.root;',
+    "styles['space-compact'];",
+    'styles.rooot;',
+  ].join('\n'), fixture('Component.js'));
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]!.ruleId, 'css-modules/no-unknown-class');
+  assert.match(messages[0]!.message, /Unknown CSS Module class "rooot".*Did you mean styles\.root\?/);
+
+  const unresolvableMessages = await lint(
+    "import styles from './less/features.module.less';\nstyles.root;",
+    fixture('Component.js'),
+    {},
+    repositoryRoot,
+    'unresolvable-stylesheet',
+  );
+  assert.deepEqual(unresolvableMessages, []);
+});
+
+test('resolves and invalidates Less imports through tsconfig aliases', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    writeProjectFile(rootDir, 'tsconfig.json', JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '@theme': ['src/first/theme.less'] } },
+    }));
+    writeProjectFile(rootDir, 'src/first/theme.less', '@name: first;');
+    writeProjectFile(rootDir, 'src/second/theme.less', '@name: second;');
+    const stylesheet = writeProjectFile(rootDir, 'src/entry.module.less', [
+      "@import '@theme';",
+      '.entry-@{name} { display: block; }',
+    ].join('\n'));
+    const options = normalizeOptions(undefined, rootDir);
+
+    assert.ok(extractClasses(stylesheet, options)?.classes.has('entry-first'));
+
+    writeProjectFile(rootDir, 'tsconfig.json', JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '@theme': ['src/second/theme.less'] } },
+    }));
+    assert.ok(extractClasses(stylesheet, options)?.classes.has('entry-second'));
+    clearExtractionCache();
+  });
+});
+
+test('rejects unsafe Less imports before reading files', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const entry = writeProjectFile(rootDir, 'src/entry.module.less', '.root { display: block; }');
+    writeProjectFile(rootDir, 'src/tokens.less', '@c: red;');
+    writeProjectFile(rootDir, 'src/helper.js', 'module.exports = {};');
+    writeProjectFile(rootDir, 'node_modules/pkg/vendor.less', '@v: blue;');
+    const options = normalizeOptions(undefined, rootDir);
+    const dependencies = new Set<string>();
+    const directory = join(rootDir, 'src');
+    const fileManager = safeLessFileManager(entry, options, dependencies, installedLess);
+
+    // Always true: declining support hands the read back to Less's own unsandboxed file manager.
+    assert.equal(fileManager.supports(), true);
+    assert.equal(fileManager.supportsSync(), true);
+
+    const loaded = fileManager.loadFileSync('tokens', directory, { ext: '.less' });
+    assert.equal(loaded.filename, join(rootDir, 'src', 'tokens.less'));
+    assert.match(loaded.contents!, /@c: red;/);
+    assert.deepEqual([...dependencies], [join(rootDir, 'src', 'tokens.less')]);
+
+    // An explicit extension is kept rather than doubled, with or without a suggested one.
+    assert.equal(fileManager.loadFileSync('tokens.less', directory, {}).filename, join(rootDir, 'src', 'tokens.less'));
+
+    for (const [specifier, loadOptions] of [
+      ['../../outside', { ext: '.less' }],
+      ['http://evil.example/x.less', { ext: '.less' }],
+      ['../node_modules/pkg/vendor', { ext: '.less' }],
+      ['./evil', { ext: '.js' }],
+      ['helper.js', {}],
+      ['./evil.js', { mime: 'application/javascript', ext: '.js' }],
+      ['missing', { ext: '.less' }],
+    ] as [string, { ext?: string; mime?: string }][]) {
+      const refused = fileManager.loadFileSync(specifier, directory, loadOptions);
+      assert.equal(refused.filename, undefined, `expected ${specifier} to be refused`);
+      assert.ok(refused.error);
+    }
+
+    await assert.rejects(fileManager.loadFile(), /synchronously/);
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test('refuses Less @plugin directives and inline JavaScript', () => {
+  withTemporaryProject((rootDir) => {
+    const sentinel = join(rootDir, 'PWNED');
+    const options = normalizeOptions(undefined, rootDir);
+    writeProjectFile(rootDir, 'evil.js', [
+      'module.exports = {',
+      `  install() { require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'pwned'); },`,
+      '};',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'partial.less', '@plugin "./evil.js";\n@c: red;');
+
+    const direct = writeProjectFile(rootDir, 'direct.module.less', '@plugin "./evil.js";\n.a { color: red; }');
+    const viaImport = writeProjectFile(rootDir, 'imported.module.less', "@import 'partial';\n.b { color: @c; }");
+    const inlineJs = writeProjectFile(rootDir, 'inline.module.less', '.c { width: ~`1 + 1`; }');
+
+    assert.equal(extractClasses(direct, options), undefined);
+    assert.equal(extractClasses(viaImport, options), undefined);
+    assert.equal(extractClasses(inlineJs, options), undefined);
+    assert.equal(existsSync(sentinel), false);
+  });
+});
+
+test('treats Less :extend as an incomplete unused-class analysis', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'View.js', 'export {};');
+    const stylesheet = writeProjectFile(rootDir, 'extended.module.less', [
+      '.base { color: red; }',
+      '.notice:extend(.base) { display: block; }',
+    ].join('\n'));
+    const extracted = extractClasses(stylesheet, normalizeOptions(undefined, rootDir));
+
+    assert.equal(extracted?.hasExtend, true);
+    assert.equal(extracted?.hasSassExtend, true);
+
+    const messages = await lint(
+      "import styles from './extended.module.less';\nstyles.notice;",
+      source,
+      {},
+      rootDir,
+      'no-unused-class',
+    );
+    assert.deepEqual(messages, []);
+    assert.deepEqual(findUnusedClasses({ rootDir }), { incomplete: true, unused: [] });
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test('reports a missing Less compiler with an install hint', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'View.js', 'export {};');
+    const stylesheet = writeProjectFile(rootDir, 'Card.module.less', '.root { display: block; }');
+    writeProjectFile(rootDir, 'plain.module.css', '.plain {}');
+    const options = normalizeOptions(undefined, rootDir);
+    const code = [
+      "import styles from './Card.module.less';",
+      "import plain from './plain.module.css';",
+      'styles.root;',
+      'plain.plain;',
+    ].join('\n');
+
+    clearExtractionCache();
+    setLessLoader(() => {
+      throw new Error("Cannot find module 'less'");
+    });
+
+    const messages = await lint(code, source, {}, rootDir, 'unresolvable-stylesheet');
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]!.message, /Install the optional peer dependency "less"/);
+    assert.match(messages[0]!.message, /Card\.module\.less/);
+
+    // The other rules stay silent rather than inventing unknown classes.
+    assert.deepEqual(await lint(code, source, {}, rootDir, 'no-unknown-class'), []);
+    assert.deepEqual(findUnusedClasses({ rootDir }), { incomplete: true, unused: [] });
+
+    // A compiler that never calls back, and one that reports no output, both fail closed.
+    clearExtractionCache();
+    setLessLoader(() => ({ FileManager: class {}, render: () => undefined }));
+    assert.equal(extractClasses(stylesheet, options), undefined);
+
+    clearExtractionCache();
+    setLessLoader(() => ({
+      FileManager: class {},
+      render: (_source: string, _options: unknown, callback: (error: unknown) => void) => {
+        callback(new Error('boom'));
+      },
+    }));
+    assert.equal(extractClasses(stylesheet, options), undefined);
+  } finally {
+    setLessLoader(undefined);
+    clearExtractionCache();
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test('declares less as an optional peer dependency', () => {
+  assert.equal(packageManifest.peerDependencies['less'], '^4.0.0');
+  assert.equal(packageManifest.peerDependenciesMeta['less']?.optional, true);
+  assert.equal(Object.hasOwn(packageManifest.dependencies, 'less'), false);
+});
+
 test('recognizes ICSS exports without treating imports as module properties', async () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
   const rootDir = realpathSync(temporaryDirectory);
@@ -614,6 +849,7 @@ test('reports unresolved and uncompilable CSS Modules separately', async () => {
     "import styles from './basic.module.css';",
     "import missing from './missing.module.scss';",
     "import broken from './sass/dynamic.module.scss';",
+    "import brokenLess from './less/dynamic.module.less';",
     "import ordinary from './ordinary.js';",
     "import * as namespace from './basic.module.css';",
     "import { root } from './basic.module.css';",
@@ -621,10 +857,12 @@ test('reports unresolved and uncompilable CSS Modules separately', async () => {
     'styles.root;',
   ].join('\n'), fixture('Component.js'), { cacheLimit: 2 }, repositoryRoot, 'unresolvable-stylesheet');
 
-  assert.equal(messages.length, 2);
+  assert.equal(messages.length, 3);
   assert.equal(messages[0]!.ruleId, 'css-modules/unresolvable-stylesheet');
   assert.match(messages[0]!.message, /Unable to resolve CSS Module "\.\/missing\.module\.scss"/);
   assert.match(messages[1]!.message, /Unable to compile CSS Module "\.\/sass\/dynamic\.module\.scss"/);
+  assert.match(messages[2]!.message, /Unable to compile CSS Module "\.\/less\/dynamic\.module\.less"/);
+  assert.doesNotMatch(messages[2]!.message, /Install the optional peer dependency/);
 });
 
 test('resolves tsconfig path aliases and composition dependencies', async () => {
@@ -1115,6 +1353,9 @@ test('fingerprints only safe, still-present stylesheet dependencies', () => {
       assert.equal(compileStylesheet(join(rootDir, 'missing.module.css'), normalizeOptions(undefined, rootDir)), undefined);
       const outsideSass = writeProjectFile(outsideDir, 'outside.module.scss', '.outside { color: red; }');
       assert.equal(compileStylesheet(outsideSass, normalizeOptions(undefined, rootDir)), undefined);
+      // Less compiles it fine; fingerprinting is what rejects a file outside the project root.
+      const outsideLess = writeProjectFile(outsideDir, 'outside.module.less', '.outside { color: red; }');
+      assert.equal(compileStylesheet(outsideLess, normalizeOptions(undefined, rootDir)), undefined);
     } finally {
       rmSync(outsideDir, { force: true, recursive: true });
     }
