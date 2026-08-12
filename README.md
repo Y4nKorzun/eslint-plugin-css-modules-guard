@@ -171,6 +171,44 @@ export default [
 
 Static dot access, static bracket access, and object destructuring count as use. Local `composes` dependencies count as use too. Dynamic access, passing the module object elsewhere, or Sass `@extend` makes the rule skip that module instead of issuing a risky false positive.
 
+When the rule skips a module, it skips it entirely — no classes from that stylesheet are reported, even ones that really are unused, because the rule can no longer tell:
+
+```js
+import styles from './Button.module.scss';
+
+styles.root;               // counted as use
+const { icon } = styles;   // counted as use
+styles[iconVariant];       // dynamic: the whole module is skipped, not just this line
+applyTheme(styles);        // passed elsewhere: the whole module is skipped too
+```
+
+```scss
+/* Card.module.scss */
+.card {
+  @extend .panel; // any Sass @extend in the file skips the whole module, regardless of usage
+}
+```
+
+```scss
+/* Card.module.scss */
+.base {}
+.card {
+  composes: base; // .base is used because .card composes it, even without a direct JS reference
+}
+```
+
+Cross-file `composes: base from './base.module.css'` is different: it makes `.base` resolve as
+part of `Card`'s exported properties for `no-unknown-class`, but it does not mark `.base` as used
+inside `base.module.css` — usage there still has to come from a JS reference in the same file that
+imports `base.module.css`.
+
+Because the skip is whole-module, a single stray report almost never means "the rule missed one
+use case" — it means every usage found in that file was static, and the class in question
+genuinely wasn't one of them. The most common cause: the class is only ever used from a *different*
+source file. The rule only looks at the file that does the `import`, by design (see above); classes
+inside `:global()` are a local module's public API surface and are never checked by this rule at
+all, in either direction.
+
 For stylesheets with several consumers, use the project-wide CLI instead:
 
 ```sh
