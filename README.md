@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/eslint-plugin-css-modules-guard.svg)](https://www.npmjs.com/package/eslint-plugin-css-modules-guard)
 [![npm downloads](https://img.shields.io/npm/dm/eslint-plugin-css-modules-guard.svg)](https://www.npmjs.com/package/eslint-plugin-css-modules-guard)
+[![CI](https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/actions/workflows/ci.yml)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Catch CSS Modules mistakes before they reach the browser. This ESLint 9 and 10 flat-config plugin reads your local `.module.css`, `.module.scss`, and `.module.sass` files at lint time, so it can check the class names your code actually uses.
