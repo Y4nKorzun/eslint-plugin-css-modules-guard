@@ -35,8 +35,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          # Coverage thresholds run on a single version: Node 20 and 22 count the test file itself
-          # toward function coverage, while Node 24 excludes it, so the gate is not portable.
+          # The gate itself is portable across Node 22.5+ (test:coverage passes
+          # --test-coverage-exclude, added in v22.5.0). Pinned to one version so the matrix above
+          # does not run the same thresholds six times.
           node-version: '24'
           cache: npm
       - run: npm ci
