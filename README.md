@@ -217,6 +217,20 @@ npm install --save-dev typescript-plugin-css-modules
 
 The TypeScript plugin improves editor experience, but it does not run during `tsc`; keep this ESLint plugin for a repeatable local and CI check.
 
+## Coming from eslint-plugin-css-modules
+
+[`eslint-plugin-css-modules`](https://github.com/atfzl/eslint-plugin-css-modules) is marked **not maintained** and only supports the legacy `.eslintrc` format, so it cannot be configured under ESLint 9/10 flat config at all. This package is a from-scratch flat-config replacement; it does not share code or a config format with it.
+
+| `eslint-plugin-css-modules` | This package | Notes |
+| --- | --- | --- |
+| `css-modules/no-undef-class` | `css-modules/no-unknown-class` | Also understands destructuring and template literals, and offers typo suggestions |
+| `css-modules/no-unused-class` | `css-modules/no-unused-class` | Same intent; opt-in here because it assumes one file owns the module |
+| `{ camelCase: true }` rule option | `localsConvention: 'camelCase'` plugin option | Shared across every enabled rule instead of set per rule |
+| `settings['css-modules'].basePath` | `aliases` / automatic `tsconfig.json` reading | No global base path; aliases are explicit or derived from `compilerOptions.paths` |
+| `.eslintrc` `plugins` + `extends` | flat config `cssModules.configs.recommended` | See [Quick start](#quick-start) |
+
+To migrate: remove `eslint-plugin-css-modules` and its `.eslintrc` entries, install this package, and add `cssModules.configs.recommended` to your flat config as shown above. There is no automated codemod; the rule behavior is close enough that most projects only need to re-tune `suggestThreshold` and `localsConvention` after switching.
+
 ## Scope and safety
 
 - Checks default imports ending in `.module.css`, `.module.scss`, or `.module.sass`.
