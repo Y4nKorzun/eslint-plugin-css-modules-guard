@@ -684,12 +684,58 @@ test('refuses Less @plugin directives and inline JavaScript', () => {
 
     const direct = writeProjectFile(rootDir, 'direct.module.less', '@plugin "./evil.js";\n.a { color: red; }');
     const viaImport = writeProjectFile(rootDir, 'imported.module.less', "@import 'partial';\n.b { color: @c; }");
-    const inlineJs = writeProjectFile(rootDir, 'inline.module.less', '.c { width: ~`1 + 1`; }');
+    // Not at the start of a line, so the source scan cannot match it. This is the case that
+    // proves the file manager's JavaScript refusal works against real Less, not just the regex.
+    const offset = writeProjectFile(rootDir, 'offset.module.less', '/* c */@plugin "./evil.js";\n.d { color: red; }');
+    const inlineJs = writeProjectFile(rootDir, 'inline.module.less', [
+      '.c {',
+      `  width: ~\`(function () { require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'pwned'); return 1; })()\`;`,
+      '}',
+    ].join('\n'));
 
     assert.equal(extractClasses(direct, options), undefined);
     assert.equal(extractClasses(viaImport, options), undefined);
+    assert.equal(extractClasses(offset, options), undefined);
     assert.equal(extractClasses(inlineJs, options), undefined);
     assert.equal(existsSync(sentinel), false);
+  });
+});
+
+test('hands Less nothing but stylesheets, whatever the import asks for', () => {
+  withTemporaryProject((rootDir) => {
+    const options = normalizeOptions(undefined, rootDir);
+    writeProjectFile(rootDir, 'secret.env', 'API_KEY=super-secret-value');
+    writeProjectFile(rootDir, 'app.js', 'const token = "js-secret-value";');
+    // A stylesheet name is not evidence of a stylesheet: this one resolves to JavaScript.
+    symlinkSync(join(rootDir, 'app.js'), join(rootDir, 'disguised.less'));
+
+    // Positive control: the same import form works when it really does resolve to a stylesheet,
+    // so the refusal below is about what the symlink points at, not about `(inline)` itself.
+    writeProjectFile(rootDir, 'genuine.less', '.genuine { color: blue; }');
+    const control = writeProjectFile(rootDir, 'control.module.less', [
+      "@import (inline) 'genuine.less';",
+      '.ok { color: red; }',
+    ].join('\n'));
+    assert.deepEqual([...extractClasses(control, options)!.classes].sort(), ['genuine', 'ok']);
+
+    const inlined = writeProjectFile(rootDir, 'inlined.module.less', [
+      "@import (inline) 'disguised.less';",
+      '.ok { color: red; }',
+    ].join('\n'));
+    // Refused outright, so the JavaScript never reaches the compiled CSS at all.
+    assert.equal(compileStylesheet(inlined, options), undefined);
+
+    // data-uri reads a file and Less interpolation can carry the bytes into a selector, which
+    // this plugin would then print as a class name. It degrades to a plain url() instead.
+    const leak = writeProjectFile(rootDir, 'leak.module.less', [
+      '@leak: data-uri("text/plain","./secret.env");',
+      '.@{leak} { color: red; }',
+    ].join('\n'));
+    const extracted = extractClasses(leak, options);
+
+    assert.ok(extracted);
+    assert.equal([...extracted.classes].join(' ').includes('super-secret-value'), false);
+    assert.deepEqual([...extracted.classes], ['url("./secret.env")']);
   });
 });
 
@@ -1512,6 +1558,35 @@ test('scans supported source files conservatively and ignores unsafe paths', () 
       assert.equal(extensionStyles.startsWith(rootDir), true);
     } finally {
       rmSync(outsideDir, { force: true, recursive: true });
+    }
+  });
+});
+
+test('scans Less through the CLI and fails closed without a compiler', () => {
+  withTemporaryProject((rootDir) => {
+    clearExtractionCache();
+    writeProjectFile(rootDir, 'Card.module.less', '.used { display: block; }\n.stale { display: none; }');
+    writeProjectFile(rootDir, 'View.ts', "import styles from './Card.module.less';\nstyles.used;\n");
+    const output: string[] = [];
+
+    assert.equal(runCli(['check-unused', '--root', rootDir], (line) => output.push(line)), 1);
+    assert.deepEqual(output, ['Card.module.less: stale']);
+
+    // Without the optional compiler the scan cannot account for the stylesheet, so it reports
+    // an incomplete run rather than a clean one. This is the documented 0 -> 2 upgrade note.
+    // The cache is cleared after stubbing: a cache entry survives the compiler disappearing,
+    // because it is validated by content hash and the compiler is not part of its key.
+    output.length = 0;
+    setLessLoader(() => {
+      throw new Error("Cannot find module 'less'");
+    });
+    clearExtractionCache();
+    try {
+      assert.equal(runCli(['check-unused', '--root', rootDir], (line) => output.push(line)), 2);
+      assert.deepEqual(output, ['Unable to complete unused CSS Module class scan.']);
+    } finally {
+      setLessLoader(undefined);
+      clearExtractionCache();
     }
   });
 });

@@ -31,8 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Less can execute JavaScript through `@plugin` and inline backticks. Neither is permitted:
-  compilation runs with `javascriptEnabled: false`, the Less file manager refuses JavaScript
-  loads, and any stylesheet declaring `@plugin` - directly or through an import - is not compiled.
+  compilation runs with `javascriptEnabled: false`, and the Less file manager refuses every load
+  Less marks as JavaScript, which is how plugin loads arrive.
+- The Less file manager reads only `.less` and `.css` files, allowlisted on the resolved path
+  rather than the requested name. Less inlines the bytes of anything it reads - via
+  `@import (inline)`, `data-uri()`, or `image-size()` - and selector interpolation can then turn
+  those bytes into a class name that this plugin prints in a diagnostic. Without the allowlist, a
+  hostile `.module.less` could read a project file such as `.env`, or reach a `.js` file through a
+  `*.less` symlink, and surface its contents in lint output. As a consequence, `data-uri()` and
+  `image-size()` no longer resolve images; `data-uri()` degrades to a plain `url(...)`.
 
 ### Upgrade note
 

@@ -183,9 +183,11 @@ import styles from './Card.module.less';
 styles['card--active'];
 ```
 
-Less can execute JavaScript through its `@plugin` directive and inline backticks. Both are refused:
-a stylesheet declaring `@plugin` is never compiled, and inline JavaScript stays disabled. Neither
-is a supported way to generate class names here.
+Less can execute JavaScript through its `@plugin` directive and inline backticks. Both are
+refused, and only `.less` and `.css` files inside the project are ever handed to the compiler.
+That last part is why `data-uri()` and `image-size()` do not resolve images: Less inlines the bytes
+of whatever it reads, and interpolation can turn them into a class name. `data-uri()` degrades to
+a plain `url(...)` and leaves class names unaffected.
 
 Only local project files are followed. Paths outside the project root, symlink escapes,
 `node_modules` composition, remote URLs, and package imports are rejected, for Sass and Less
@@ -314,6 +316,7 @@ To migrate: remove `eslint-plugin-css-modules` and its `.eslintrc` entries, inst
 - Reads regular local files only; performs no writes, subprocess execution, `eval`, or configuration execution.
 - Parses `tsconfig.json` as data and uses local-only Sass and Less file resolution.
 - Refuses Less `@plugin` directives and inline JavaScript, so a stylesheet cannot run code.
+- Reads only `.less` and `.css` files for Less, checked after symlink resolution.
 
 See the [security policy](SECURITY.md) for reporting security issues.
 

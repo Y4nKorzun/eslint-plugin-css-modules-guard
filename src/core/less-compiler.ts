@@ -53,9 +53,19 @@ export interface LessModule {
 
 export type LessLoader = (id: string) => unknown;
 
-/** `@plugin` makes Less load and execute JavaScript, so a file declaring one is never compiled. */
+/**
+ * `@plugin` makes Less load and execute JavaScript. This catches the common form early; the real
+ * guarantee is the JavaScript refusal in `resolveLessImport`, which Less routes every plugin load
+ * through regardless of where in the file the directive appears.
+ */
 const LESS_PLUGIN_DIRECTIVE = /^\s*@plugin\b/m;
-const JAVASCRIPT_EXTENSIONS = new Set(['.js', '.cjs', '.mjs']);
+/**
+ * Only stylesheets are ever handed to Less. An allowlist rather than a `.js` denylist, because
+ * Less will inline the bytes of whatever it is given - through `@import (inline)`, `data-uri()`,
+ * or `image-size()` - and interpolation can then carry those bytes into a selector, which this
+ * plugin reports as a class name. A denylist also misses a `*.less` symlink pointing at a secret.
+ */
+const STYLESHEET_EXTENSIONS = new Set(['.less', '.css']);
 /** Matches a URL scheme without swallowing a Windows drive letter (`C:\...`). */
 const NON_LOCAL_SCHEME = /^[a-z][a-z0-9+.-]+:/i;
 /** Less's own `AbstractFileManager.tryAppendExtension` guard. */
@@ -132,13 +142,10 @@ function resolveLessImport(
   candidates.push(...loadPaths.map((loadPath) => resolve(loadPath, specifier)));
 
   for (const candidate of candidates) {
-    const withExtension = withLessExtension(candidate, loadOptions.ext);
-    if (JAVASCRIPT_EXTENSIONS.has(extname(withExtension).toLowerCase())) {
-      continue;
-    }
-
-    const safeFile = isSafeProjectFile(withExtension, options.rootDir);
-    if (safeFile) {
+    const safeFile = isSafeProjectFile(withLessExtension(candidate, loadOptions.ext), options.rootDir);
+    // Checked on the resolved path, never the requested name: a `*.less` symlink can point at any
+    // file in the project, and the requested name says nothing about what is actually on disk.
+    if (safeFile && STYLESHEET_EXTENSIONS.has(extname(safeFile).toLowerCase())) {
       return safeFile;
     }
   }
