@@ -18,6 +18,11 @@ export const cssModulesOptionsSchema: readonly [JSONSchema4] = [
         type: 'object',
         additionalProperties: { type: 'string' },
       },
+      loadPaths: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+      /** @deprecated Merged into `loadPaths`. */
       sassLoadPaths: {
         type: 'array',
         items: { type: 'string' },

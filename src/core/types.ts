@@ -3,6 +3,9 @@ export type LocalsConvention = 'asIs' | 'camelCase' | 'camelCaseOnly' | 'dashes'
 export interface CssModulesOptions {
   localsConvention?: LocalsConvention;
   aliases?: Record<string, string>;
+  /** Local directories searched by every stylesheet compiler. */
+  loadPaths?: string[];
+  /** @deprecated Renamed to `loadPaths`, which both Sass and Less use. Still honored. */
   sassLoadPaths?: string[];
   suggestThreshold?: number;
   cache?: boolean;
@@ -13,7 +16,7 @@ export interface ExtractorOptions {
   rootDir: string;
   localsConvention: LocalsConvention;
   aliases: Record<string, string>;
-  sassLoadPaths: string[];
+  loadPaths: string[];
   suggestThreshold: number;
   cache: boolean;
   cacheLimit: number;

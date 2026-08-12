@@ -1489,6 +1489,7 @@ test('CLI covers valid flags, text output, and invalid input safely', () => {
       '--root', rootDir,
       '--format', 'text',
       '--alias', '@styles=styles',
+      '--load-path', 'sass',
       '--sass-load-path', 'sass',
       '--locals-convention', 'camelCase',
       '--no-cache',

@@ -17,7 +17,7 @@ interface CliArguments {
   localsConvention: LocalsConvention;
   paths: string[];
   rootDir: string;
-  sassLoadPaths: string[];
+  loadPaths: string[];
 }
 
 function usage(): string {
@@ -28,7 +28,8 @@ function usage(): string {
     '  --root <path>                 Project root (default: current directory)',
     '  --format <text|json>          Output format (default: text)',
     '  --alias <prefix=path>         Repeatable local import alias',
-    '  --sass-load-path <path>       Repeatable local Sass load path',
+    '  --load-path <path>            Repeatable local compiler load path',
+    '  --sass-load-path <path>       Deprecated alias for --load-path',
     '  --locals-convention <value>   asIs, camelCase, camelCaseOnly, or dashes',
     '  --no-cache                    Disable the in-memory extraction cache',
     '  --cache-limit <count>         Max cached stylesheets (default: 256)',
@@ -55,7 +56,7 @@ function parseArguments(args: readonly string[]): CliArguments {
     localsConvention: 'asIs',
     paths: [],
     rootDir: process.cwd(),
-    sassLoadPaths: [],
+    loadPaths: [],
   };
 
   for (let index = 1; index < args.length; index += 1) {
@@ -91,8 +92,9 @@ function parseArguments(args: readonly string[]): CliArguments {
         index += 1;
         break;
       }
+      case '--load-path':
       case '--sass-load-path':
-        parsed.sassLoadPaths.push(nextValue(args, index, argument));
+        parsed.loadPaths.push(nextValue(args, index, argument));
         index += 1;
         break;
       case '--locals-convention': {

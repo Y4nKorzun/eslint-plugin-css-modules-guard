@@ -69,7 +69,7 @@ function isCacheValid(entry: CacheEntry): boolean {
 
 function cacheKey(filePath: string, options: ExtractorOptions): string {
   const aliases = Object.entries(options.aliases);
-  return [filePath, options.rootDir, ...options.sassLoadPaths, JSON.stringify(aliases)].join('\0');
+  return [filePath, options.rootDir, ...options.loadPaths, JSON.stringify(aliases)].join('\0');
 }
 
 function trimCache(cacheLimit: number): void {

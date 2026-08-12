@@ -44,7 +44,7 @@ export function isInsideOrEqual(rootDir: string, candidate: string): boolean {
 
 /** Local directories a compiler may search, after the same containment checks as any read. */
 export function safeLoadPaths(options: ExtractorOptions): string[] {
-  return options.sassLoadPaths.flatMap((loadPath) => {
+  return options.loadPaths.flatMap((loadPath) => {
     try {
       const candidate = isAbsolute(loadPath)
         ? loadPath

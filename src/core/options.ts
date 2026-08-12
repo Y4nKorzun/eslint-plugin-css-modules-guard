@@ -6,6 +6,7 @@ import type { CssModulesOptions, ExtractorOptions } from './types.js';
 const DEFAULTS: Required<CssModulesOptions> = {
   localsConvention: 'asIs',
   aliases: {},
+  loadPaths: [],
   sassLoadPaths: [],
   suggestThreshold: 2,
   cache: true,
@@ -29,7 +30,10 @@ export function normalizeOptions(
     rootDir: safeRoot,
     localsConvention: options?.localsConvention ?? DEFAULTS.localsConvention,
     aliases: options?.aliases ?? DEFAULTS.aliases,
-    sassLoadPaths: options?.sassLoadPaths ?? DEFAULTS.sassLoadPaths,
+    loadPaths: [
+      ...(options?.sassLoadPaths ?? DEFAULTS.sassLoadPaths),
+      ...(options?.loadPaths ?? DEFAULTS.loadPaths),
+    ],
     suggestThreshold: options?.suggestThreshold ?? DEFAULTS.suggestThreshold,
     cache: options?.cache ?? DEFAULTS.cache,
     cacheLimit: Number.isSafeInteger(cacheLimit) && cacheLimit > 0

@@ -72,7 +72,7 @@ const cssModulesOptions = {
   aliases: {
     '@styles/*': 'src/styles/*',
   },
-  sassLoadPaths: ['src/styles'],
+  loadPaths: ['src/styles'],
   suggestThreshold: 2,
   cache: true,
   cacheLimit: 512,
@@ -94,7 +94,8 @@ export default [
 | --- | --- | --- |
 | `localsConvention` | `'asIs'` | CSS-loader-style property names: `asIs`, `camelCase`, `camelCaseOnly`, or `dashes` |
 | `aliases` | `{}` | Local, project-root-relative mappings for CSS Module and Sass imports |
-| `sassLoadPaths` | `[]` | Local Sass load paths, relative to the project root unless absolute |
+| `loadPaths` | `[]` | Local compiler load paths, relative to the project root unless absolute |
+| `sassLoadPaths` | `[]` | Deprecated alias for `loadPaths`; both are honored and merged |
 | `suggestThreshold` | `2` | Maximum edit distance for unknown-class suggestions (`0` disables suggestions) |
 | `cache` | `true` | Enables the in-memory stylesheet extraction cache |
 | `cacheLimit` | `256` | Maximum number of recently used stylesheets held in that cache |
@@ -230,12 +231,12 @@ css-modules-lint check-unused src \
   --root . \
   --format json \
   --alias '@styles/*=src/styles/*' \
-  --sass-load-path src/styles \
+  --load-path src/styles \
   --locals-convention camelCase \
   --cache-limit 512
 ```
 
-Available CLI options are `--root <path>`, `--format <text|json>`, repeatable `--alias <prefix=path>` and `--sass-load-path <path>`, `--locals-convention <value>`, `--no-cache`, and `--cache-limit <count>`.
+Available CLI options are `--root <path>`, `--format <text|json>`, repeatable `--alias <prefix=path>` and `--load-path <path>` (`--sass-load-path` is a deprecated alias), `--locals-convention <value>`, `--no-cache`, and `--cache-limit <count>`.
 
 ## Editor autocomplete
 
