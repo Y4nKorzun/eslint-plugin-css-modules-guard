@@ -739,6 +739,44 @@ test('hands Less nothing but stylesheets, whatever the import asks for', () => {
   });
 });
 
+test('applies CSS Modules semantics to Less output', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'View.js', 'export {};');
+    writeProjectFile(rootDir, 'base.module.css', '.base { color: red; }');
+    const stylesheet = writeProjectFile(rootDir, 'Card.module.less', [
+      '@name: card;',
+      ':export { brandColor: #0a0; }',
+      '.@{name}-title { font-weight: bold; }',
+      ".composed { composes: base from './base.module.css'; }",
+      ':global(.vendor-widget) { display: block; }',
+    ].join('\n'));
+    const extracted = extractClasses(stylesheet, normalizeOptions({ localsConvention: 'camelCase' }, rootDir));
+
+    assert.ok(extracted);
+    // Interpolated selector, ICSS :export, cross-file composes, and the camelCase alias of a
+    // hyphenated class are all readable; :global is exposed but is not a local class.
+    assert.equal(extracted.classes.has('card-title'), true);
+    assert.equal(extracted.classes.has('cardTitle'), true);
+    assert.equal(extracted.classes.has('brandColor'), true);
+    assert.equal(extracted.classes.has('composed'), true);
+    assert.equal(extracted.classes.has('vendor-widget'), true);
+    assert.equal(extracted.localClasses.has('vendor-widget'), false);
+
+    const messages = await lint([
+      "import styles from './Card.module.less';",
+      'styles.cardTitle;',
+      'styles.brandColor;',
+      'styles.nope;',
+    ].join('\n'), source, { localsConvention: 'camelCase' }, rootDir);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]!.message, /Unknown CSS Module class "nope"/);
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test('treats Less :extend as an incomplete unused-class analysis', async () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
   const rootDir = realpathSync(temporaryDirectory);
