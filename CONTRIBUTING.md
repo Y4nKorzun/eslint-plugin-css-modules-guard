@@ -33,6 +33,9 @@ missing stylesheet, an unresolvable alias, invalid Sass, and similar edge cases 
   fixture alongside existing ones rather than inlining large CSS/SCSS strings in the test file.
 - Keep rule behavior conservative: when in doubt, skip a check rather than risk a false positive
   (`no-unused-class` deliberately skips modules it can't fully account for; follow that precedent).
+- `less` is an **optional peer dependency**, kept as a devDependency so the tests can compile
+  Less. It must never move into `dependencies`: projects that do not use Less should not
+  download a Less compiler. Import it only through the loader in `src/core/less-compiler.ts`.
 - Rules must stay read-only — no writing files, running subprocesses, or executing `eval`. See
   [`SECURITY.md`](SECURITY.md) for the threat model this plugin operates under.
 - Update `README.md` when you change an option, a rule's behavior, or the CLI, and add an entry to

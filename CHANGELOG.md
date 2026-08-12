@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-13
+
+### Added
+
+- `.module.less` support across `no-unknown-class`, `unresolvable-stylesheet`, `no-unused-class`,
+  and the CLI. Nesting, `&` concatenation, mixins, selector interpolation, and local `@import`
+  resolve before selectors are read.
+- `less` as an **optional** peer dependency (`^4.0.0`). Projects that do not use Less install
+  nothing extra; a `.module.less` import without it is reported by `unresolvable-stylesheet` with
+  an install hint.
+- `loadPaths` option and `--load-path` CLI flag, used by both the Sass and Less compilers.
+
+### Changed
+
+- `sassLoadPaths` and `--sass-load-path` are deprecated in favour of `loadPaths` and
+  `--load-path`. Both keep working and are merged, so no configuration change is required.
+- `ExtractionResult.hasSassExtend` is deprecated in favour of `hasExtend`, which also covers Less
+  `:extend()`. Both fields are populated.
+- `npm run test:coverage` now passes `--test-coverage-exclude`, so the 100% gate no longer depends
+  on a Node 24 default. That script requires Node 22.5+; the package still supports Node 20+.
+
+### Security
+
+- Less can execute JavaScript through `@plugin` and inline backticks. Neither is permitted:
+  compilation runs with `javascriptEnabled: false`, the Less file manager refuses JavaScript
+  loads, and any stylesheet declaring `@plugin` - directly or through an import - is not compiled.
+
+### Upgrade note
+
+The CLI now scans `.module.less` files. A project that contains them **without** `less` installed
+changes from exit `0` to exit `2` (`incomplete`), because the scan can no longer account for those
+stylesheets. Install `less` or exclude those paths.
+
 ## [0.8.2] - 2026-08-12
 
 ### Added
@@ -98,7 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release: `css-modules/no-unknown-class` and `css-modules/unresolvable-stylesheet` rules
   for ESLint 9 flat config, reading local `.module.css`, `.module.scss`, and `.module.sass` files.
 
-[Unreleased]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.7.1...v0.8.0

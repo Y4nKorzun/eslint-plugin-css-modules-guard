@@ -5,9 +5,9 @@
 [![CI](https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/actions/workflows/ci.yml)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Catch CSS Modules mistakes before they reach the browser. This ESLint 9 and 10 flat-config plugin reads your local `.module.css`, `.module.scss`, and `.module.sass` files at lint time, so it can check the class names your code actually uses.
+Catch CSS Modules mistakes before they reach the browser. This ESLint 9 and 10 flat-config plugin reads your local `.module.css`, `.module.scss`, `.module.sass`, and `.module.less` files at lint time, so it can check the class names your code actually uses.
 
-It compiles Sass before checking selectors, understands local `composes`, and reports stylesheets that cannot be resolved or compiled. Use it in the editor and in CI; it does not need generated `.d.ts` files.
+It compiles Sass and Less before checking selectors, understands local `composes`, and reports stylesheets that cannot be resolved or compiled. Use it in the editor and in CI; it does not need generated `.d.ts` files.
 
 ## Install
 
@@ -16,6 +16,16 @@ Requires Node.js 20+ and ESLint 9 or 10.
 ```sh
 npm install --save-dev eslint eslint-plugin-css-modules-guard
 ```
+
+Sass support is built in. Less support needs the `less` compiler, which is an optional peer
+dependency, so only projects that use it pay for it:
+
+```sh
+npm install --save-dev less
+```
+
+Without `less` installed, a `.module.less` import is reported by `unresolvable-stylesheet` with an
+install hint rather than being checked or silently skipped.
 
 ## Quick start
 
@@ -54,7 +64,7 @@ ESLint exposes that correction as a suggestion; the plugin never changes source 
 | Rule | Included | What it catches |
 | --- | --- | --- |
 | `css-modules/no-unknown-class` | Yes | Static dot, bracket, template-literal, and destructured names that do not exist in the module |
-| `css-modules/unresolvable-stylesheet` | Yes | A CSS Module import that is missing, outside the project, unsafe, or cannot compile |
+| `css-modules/unresolvable-stylesheet` | Yes | A CSS Module import that is missing, outside the project, unsafe, cannot compile, or needs a compiler that is not installed |
 | `css-modules/no-unused-class` | No | Local classes unused by one source file; enable only when that ownership rule is true |
 
 `no-unknown-class` also accepts ICSS `:export` values, classes composed from local modules, and classes declared inside `:global()`. Dynamic access such as `styles[variant]` is deliberately skipped rather than guessed.
@@ -112,7 +122,7 @@ Use `localsConvention` to match your CSS loader. For a class named `.card-title`
 | `camelCase` or `dashes` | `styles['card-title']` and `styles.cardTitle` |
 | `camelCaseOnly` | `styles.cardTitle` |
 
-## Aliases and Sass
+## Aliases, Sass, and Less
 
 The plugin automatically reads `compilerOptions.paths` from the nearest local `tsconfig.json`, including safe local `extends` files and project references.
 
@@ -153,7 +163,33 @@ import styles from './Card.module.scss';
 styles['card--active'];
 ```
 
-Only local project files are followed. Paths outside the project root, symlink escapes, `node_modules` composition, remote Sass URLs, and package Sass imports are rejected.
+Less modules are compiled the same way, so nesting, `&` concatenation, mixins, selector
+interpolation, and local `@import` all resolve before selectors are read.
+
+```less
+/* Card.module.less */
+@import 'tokens';
+
+.card {
+  &--active {
+    display: block;
+  }
+}
+```
+
+```js
+import styles from './Card.module.less';
+
+styles['card--active'];
+```
+
+Less can execute JavaScript through its `@plugin` directive and inline backticks. Both are refused:
+a stylesheet declaring `@plugin` is never compiled, and inline JavaScript stays disabled. Neither
+is a supported way to generate class names here.
+
+Only local project files are followed. Paths outside the project root, symlink escapes,
+`node_modules` composition, remote URLs, and package imports are rejected, for Sass and Less
+alike.
 
 ## Find unused classes
 
@@ -273,10 +309,11 @@ To migrate: remove `eslint-plugin-css-modules` and its `.eslintrc` entries, inst
 
 ## Scope and safety
 
-- Checks default imports ending in `.module.css`, `.module.scss`, or `.module.sass`.
+- Checks default imports ending in `.module.css`, `.module.scss`, `.module.sass`, or `.module.less`.
 - Does not attempt to infer dynamic property names or inspect CSS-in-JS.
 - Reads regular local files only; performs no writes, subprocess execution, `eval`, or configuration execution.
-- Parses `tsconfig.json` as data and uses a local-only Sass importer.
+- Parses `tsconfig.json` as data and uses local-only Sass and Less file resolution.
+- Refuses Less `@plugin` directives and inline JavaScript, so a stylesheet cannot run code.
 
 See the [security policy](SECURITY.md) for reporting security issues.
 

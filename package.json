@@ -1,7 +1,7 @@
 {
   "name": "eslint-plugin-css-modules-guard",
-  "version": "0.8.2",
-  "description": "ESLint 9/10 plugin that validates CSS Modules against local CSS, SCSS, and Sass source.",
+  "version": "0.9.0",
+  "description": "ESLint 9/10 plugin that validates CSS Modules against local CSS, SCSS, Sass, and Less source.",
   "author": {
     "name": "Y4nKorzun",
     "url": "https://github.com/Y4nKorzun"
@@ -57,6 +57,7 @@
     "css-modules",
     "css-module",
     "css-modules-lint",
+    "less",
     "scss",
     "sass",
     "typescript"
