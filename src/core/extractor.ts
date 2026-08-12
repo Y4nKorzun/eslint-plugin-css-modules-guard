@@ -25,7 +25,7 @@ interface ParsedStylesheet {
   exportedValues: string[];
   rawClasses: string[];
   globalClasses: string[];
-  hasSassExtend: boolean;
+  hasExtend: boolean;
   compositions: Map<string, Composition[]>;
 }
 
@@ -42,7 +42,7 @@ interface CacheEntry {
 interface CompiledStylesheet {
   css: string;
   dependencies: Map<string, string>;
-  hasSassExtend: boolean;
+  hasExtend: boolean;
 }
 
 const SAFE_SASS_URL_SCHEME = 'css-modules-real:';
@@ -297,7 +297,7 @@ export function compileStylesheet(
   try {
     if (!/\.(?:scss|sass)$/i.test(filePath)) {
       const dependencies = fingerprintDependencies([filePath], options.rootDir);
-      return dependencies ? { css: readFileSync(filePath, 'utf8'), dependencies, hasSassExtend: false } : undefined;
+      return dependencies ? { css: readFileSync(filePath, 'utf8'), dependencies, hasExtend: false } : undefined;
     }
 
     const dependencies = new Set([filePath]);
@@ -309,11 +309,11 @@ export function compileStylesheet(
       logger: sass.Logger.silent,
     });
 
-    const hasSassExtend = [...dependencies].some(
+    const hasExtend = [...dependencies].some(
       (dependency) => /\.(?:scss|sass)$/i.test(dependency) && /@extend\b/.test(readFileSync(dependency, 'utf8')),
     );
     const fingerprints = fingerprintDependencies([...dependencies], options.rootDir);
-    return fingerprints ? { css: result.css, dependencies: fingerprints, hasSassExtend } : undefined;
+    return fingerprints ? { css: result.css, dependencies: fingerprints, hasExtend } : undefined;
   } catch {
     return undefined;
   }
@@ -359,7 +359,7 @@ function parseComposition(value: string): Composition | undefined {
 function parseStylesheet(
   css: string,
   filePath: string,
-  hasSassExtend: boolean,
+  hasExtend: boolean,
 ): ParsedStylesheet | undefined {
   try {
     const root = postcss.parse(css, { from: filePath });
@@ -407,7 +407,7 @@ function parseStylesheet(
       rawClasses: [...rawClasses],
       globalClasses: [...globalClasses],
       exportedValues: [...exportedValues],
-      hasSassExtend,
+      hasExtend,
       compositions,
     };
   } catch {
@@ -453,7 +453,7 @@ function loadParsedStylesheet(
     return undefined;
   }
 
-  const parsed = parseStylesheet(compiled.css, filePath, compiled.hasSassExtend);
+  const parsed = parseStylesheet(compiled.css, filePath, compiled.hasExtend);
   if (!parsed) {
     return undefined;
   }
@@ -507,6 +507,7 @@ function extractCssModule(
         classes: new Set(),
         localClasses: new Set(),
         localCompositions: new Map(),
+        hasExtend: false,
         hasSassExtend: false,
       },
       exports: new Map(),
@@ -612,7 +613,8 @@ function extractCssModule(
       classes,
       localClasses,
       localCompositions,
-      hasSassExtend: parsed.hasSassExtend,
+      hasExtend: parsed.hasExtend,
+      hasSassExtend: parsed.hasExtend,
     },
     exports: exportedClasses,
   };

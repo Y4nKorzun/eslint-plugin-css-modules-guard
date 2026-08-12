@@ -153,7 +153,7 @@ export const noUnusedClass = createRule<Options, MessageIds>({
       },
       'Program:exit'() {
         for (const imported of importedModules.values()) {
-          if (imported.extracted.hasSassExtend) {
+          if (imported.extracted.hasExtend) {
             continue;
           }
 

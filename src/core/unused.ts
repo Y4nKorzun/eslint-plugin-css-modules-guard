@@ -251,7 +251,7 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResul
     if (usage?.all) {
       continue;
     }
-    if (extracted.hasSassExtend) {
+    if (extracted.hasExtend) {
       return { incomplete: true, unused: [] };
     }
 

@@ -29,7 +29,9 @@ export interface ExtractionResult {
   localClasses: ReadonlySet<string>;
   /** Direct local CSS class dependencies created by `composes`. */
   localCompositions?: ReadonlyMap<string, ReadonlySet<string>>;
-  /** Sass `@extend` prevents a complete unused-class analysis. */
+  /** Sass `@extend` or Less `:extend()` prevents a complete unused-class analysis. */
+  hasExtend?: boolean;
+  /** @deprecated Renamed to `hasExtend`; still populated with the same value. */
   hasSassExtend?: boolean;
 }
 
