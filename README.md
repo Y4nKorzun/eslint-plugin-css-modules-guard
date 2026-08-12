@@ -242,7 +242,7 @@ See the [security policy](SECURITY.md) for reporting security issues.
 
 ## Contributing
 
-Found a bug, edge case, or missing CSS Modules pattern? Please [open an issue](https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/issues) with a minimal reproducer.
+Found a bug, edge case, or missing CSS Modules pattern? Please [open an issue](https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/issues) with a minimal reproducer. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow and pull request checklist.
 
 ## License
 
