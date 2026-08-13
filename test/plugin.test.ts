@@ -28,7 +28,6 @@ import {
   fingerprintDependencies,
   getExtractionCacheKeys,
   propertyNamesForClass,
-  safeSassImporter,
   stylesheetLanguage,
 } from '../src/core/extractor.js';
 import { safeLessFileManager, setLessLoader } from '../src/core/less-compiler.js';
@@ -39,6 +38,8 @@ import {
   isSafeProjectFile,
   resolveStylesheet,
 } from '../src/core/resolver.js';
+import { isSassAvailable, safeSassImporter, setSassLoader } from '../src/core/sass-compiler.js';
+import { isTypeScriptAvailable, setTypeScriptLoader } from '../src/core/typescript-loader.js';
 import { findUnusedClasses, relativeUnusedClasses } from '../src/core/unused.js';
 import plugin from '../src/index.js';
 import { noUnknownClass } from '../src/rules/no-unknown-class.js';
@@ -63,6 +64,8 @@ const packageManifest = JSON.parse(
   peerDependencies: Record<string, string>;
   peerDependenciesMeta: Record<string, { optional?: boolean }>;
 };
+const DOCS_BASE_URL =
+  'https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/blob/main/docs/rules';
 const fixture = (...segments: string[]): string => join(repositoryRoot, 'test', 'fixtures', ...segments);
 const installedLess = createRequire(import.meta.url)('less') as LessModule;
 
@@ -161,18 +164,20 @@ test('published package links point to the source repository', () => {
   });
   assert.equal(packageManifest.bugs.url, 'https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/issues');
   assert.equal(packageManifest.homepage, 'https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard#readme');
-  assert.equal(
-    noUnknownClass.meta.docs?.url,
-    'https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modulesno-unknown-class',
-  );
-  assert.equal(
-    noUnusedClass.meta.docs?.url,
-    'https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modulesno-unused-class',
-  );
-  assert.equal(
-    unresolvableStylesheet.meta.docs?.url,
-    'https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modulesunresolvable-stylesheet',
-  );
+});
+
+// The URL this replaced pointed at a README anchor that never existed, so asserting the shape is
+// not enough: the file it names has to be on disk.
+test('every rule documentation link points at a file that exists', () => {
+  for (const [name, rule] of Object.entries(plugin.rules)) {
+    const url = rule.meta.docs?.url;
+    assert.ok(url, `${name} has no documentation URL`);
+    assert.equal(url, `${DOCS_BASE_URL}/${name}.md`);
+    assert.ok(
+      existsSync(join(repositoryRoot, 'docs', 'rules', `${name}.md`)),
+      `docs/rules/${name}.md is missing`,
+    );
+  }
 });
 
 test('reports static unknown properties with a correction', async () => {
@@ -854,10 +859,191 @@ test('reports a missing Less compiler with an install hint', async () => {
   }
 });
 
-test('declares less as an optional peer dependency', () => {
-  assert.equal(packageManifest.peerDependencies['less'], '^4.0.0');
-  assert.equal(packageManifest.peerDependenciesMeta['less']?.optional, true);
-  assert.equal(Object.hasOwn(packageManifest.dependencies, 'less'), false);
+test('reports a missing Sass compiler with an install hint', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    const source = writeProjectFile(rootDir, 'View.js', 'export {};');
+    const stylesheet = writeProjectFile(rootDir, 'Card.module.scss', '.root { display: block; }');
+    const plain = writeProjectFile(rootDir, 'plain.module.css', '.plain {}');
+    const options = normalizeOptions(undefined, rootDir);
+    const code = [
+      "import styles from './Card.module.scss';",
+      "import plain from './plain.module.css';",
+      'styles.root;',
+      'plain.plain;',
+    ].join('\n');
+
+    clearExtractionCache();
+    setSassLoader(() => {
+      throw new Error("Cannot find module 'sass'");
+    });
+    assert.equal(isSassAvailable(), false);
+
+    // Dart Sass before 1.45 has no `compileString`. The peer range rules it out, but a project can
+    // ignore npm's warning, and then every valid stylesheet would fail with an unexplained compile
+    // error. Treat it as absent so the install hint fires instead.
+    setSassLoader(() => ({ Logger: { silent: undefined } }));
+    assert.equal(isSassAvailable(), false);
+
+    setSassLoader(() => {
+      throw new Error("Cannot find module 'sass'");
+    });
+
+    const messages = await lint(code, source, {}, rootDir, 'unresolvable-stylesheet');
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]!.message, /Install the optional peer dependency "sass"/);
+    assert.match(messages[0]!.message, /Card\.module\.scss/);
+
+    // The other rules stay silent rather than inventing unknown classes, and plain CSS keeps
+    // working: it needs no compiler at all.
+    assert.deepEqual(await lint(code, source, {}, rootDir, 'no-unknown-class'), []);
+    assert.equal(extractClasses(stylesheet, options), undefined);
+    assert.ok(extractClasses(plain, options));
+  } finally {
+    setSassLoader(undefined);
+    clearExtractionCache();
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test('degrades tsconfig aliases and the CLI scan without typescript', async () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'css-modules-real-'));
+  const rootDir = realpathSync(temporaryDirectory);
+  try {
+    writeProjectFile(rootDir, 'tsconfig.json', JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '@styles/*': ['src/styles/*'] } },
+    }));
+    writeProjectFile(rootDir, 'src/styles/theme.module.css', '.root {}');
+    const source = writeProjectFile(rootDir, 'src/View.js', 'export {};');
+    const aliased = "import styles from '@styles/theme.module.css';\nstyles.root;";
+
+    clearExtractionCache();
+    assert.deepEqual(await lint(aliased, source, {}, rootDir, 'unresolvable-stylesheet'), []);
+
+    setTypeScriptLoader(() => {
+      throw new Error("Cannot find module 'typescript'");
+    });
+    clearExtractionCache();
+    assert.equal(isTypeScriptAvailable(), false);
+
+    // The alias stops resolving, and the report names the cause instead of blaming the file.
+    const messages = await lint(aliased, source, {}, rootDir, 'unresolvable-stylesheet');
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]!.message, /Install the optional peer dependency "typescript"/);
+
+    // Explicit `aliases` are the documented fallback and keep working with no parser at all.
+    clearExtractionCache();
+    assert.deepEqual(
+      await lint(
+        aliased,
+        source,
+        { aliases: { '@styles/*': 'src/styles/*' } },
+        rootDir,
+        'unresolvable-stylesheet',
+      ),
+      [],
+    );
+
+    // A genuinely missing relative import is never blamed on the absent parser.
+    clearExtractionCache();
+    const missing = await lint(
+      "import styles from './nope.module.css';\nstyles.root;",
+      source,
+      {},
+      rootDir,
+      'unresolvable-stylesheet',
+    );
+    assert.equal(missing.length, 1);
+    assert.match(missing[0]!.message, /Unable to resolve CSS Module/);
+    assert.doesNotMatch(missing[0]!.message, /typescript/);
+
+    // Neither is an unresolved alias in a project that has no tsconfig to read in the first place.
+    unlinkSync(join(rootDir, 'tsconfig.json'));
+    clearExtractionCache();
+    const withoutConfig = await lint(aliased, source, {}, rootDir, 'unresolvable-stylesheet');
+    assert.equal(withoutConfig.length, 1);
+    assert.doesNotMatch(withoutConfig[0]!.message, /typescript/);
+
+    // Every class looks unused when no source file can be parsed, so the scan fails closed.
+    const scan = findUnusedClasses({ rootDir });
+    assert.equal(scan.incomplete, true);
+    assert.deepEqual(scan.unused, []);
+    assert.match(scan.reason!, /Install the optional peer dependency "typescript"/);
+
+    const textOutput: string[] = [];
+    assert.equal(runCli(['check-unused', '--root', rootDir], (line) => textOutput.push(line)), 2);
+    assert.match(textOutput[0]!, /Install the optional peer dependency "typescript"/);
+
+    const jsonOutput: string[] = [];
+    assert.equal(
+      runCli(
+        ['check-unused', '--root', rootDir, '--format', 'json'],
+        (line) => jsonOutput.push(line),
+      ),
+      2,
+    );
+    const reported = JSON.parse(jsonOutput[0]!) as { incomplete: boolean; reason: string };
+    assert.equal(reported.incomplete, true);
+    assert.match(reported.reason, /Install the optional peer dependency "typescript"/);
+  } finally {
+    setTypeScriptLoader(undefined);
+    clearExtractionCache();
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test('declares every compiler as an optional peer dependency', () => {
+  for (const [name, range] of Object.entries({
+    less: '^4.0.0',
+    sass: '^1.45.0',
+    typescript: '>=4.8.4 <6.1.0',
+  })) {
+    assert.equal(packageManifest.peerDependencies[name], range);
+    assert.equal(packageManifest.peerDependenciesMeta[name]?.optional, true);
+    assert.equal(Object.hasOwn(packageManifest.dependencies, name), false);
+  }
+
+  // `@typescript-eslint/utils` declares typescript as a peer too. A range narrower than its own is
+  // what installs a second, nested copy, so the two have to stay identical.
+  const utilsManifest = JSON.parse(
+    readFileSync(
+      join(repositoryRoot, 'node_modules', '@typescript-eslint', 'utils', 'package.json'),
+      'utf8',
+    ),
+  ) as { peerDependencies: Record<string, string> };
+  assert.equal(
+    packageManifest.peerDependencies['typescript'],
+    utilsManifest.peerDependencies['typescript'],
+  );
+});
+
+test('keeps optional peer dependencies out of the published type surface', () => {
+  // An optional peer named anywhere in the reachable declarations breaks `tsc` for a consumer who
+  // did not install it. Structural types in the compiler modules exist precisely to prevent this.
+  const optional = new Set(['less', 'sass', 'typescript']);
+  const visited = new Set<string>();
+  const leaks: string[] = [];
+
+  const walk = (file: string): void => {
+    const declaration = resolve(file);
+    if (visited.has(declaration) || !existsSync(declaration)) {
+      return;
+    }
+    visited.add(declaration);
+
+    for (const [, specifier] of readFileSync(declaration, 'utf8').matchAll(/from '([^']+)'/g)) {
+      if (specifier!.startsWith('.')) {
+        walk(resolve(dirname(declaration), specifier!.replace(/\.js$/, '.d.ts')));
+      } else if (optional.has(specifier!)) {
+        leaks.push(`${relative(repositoryRoot, declaration)} -> ${specifier}`);
+      }
+    }
+  };
+
+  walk(join(repositoryRoot, 'dist', 'src', 'index.d.ts'));
+  assert.ok(visited.size > 1, 'the declaration graph was not walked');
+  assert.deepEqual(leaks, []);
 });
 
 test('recognizes ICSS exports without treating imports as module properties', async () => {

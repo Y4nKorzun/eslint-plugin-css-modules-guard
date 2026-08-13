@@ -6,7 +6,9 @@
 npm ci
 ```
 
-Requires Node.js 20.19+ (the floor the `sass` dependency itself declares). `npm run test:coverage` additionally requires **Node.js 22.5+**: it passes
+Requires Node.js 20.19+. That floor is now the project's own choice rather than one a dependency
+forces: it is what `sass` declares, so every Sass user hits it anyway, and it is what CI pins
+exactly. `npm run test:coverage` additionally requires **Node.js 22.5+**: it passes
 `--test-coverage-exclude` (added in Node v22.5.0) to keep the test file itself out of the
 function-coverage numbers, and Node 20 rejects the unknown flag outright. On Node 20 run
 `npm test`; CI enforces the coverage gate on Node 24.
@@ -33,9 +35,17 @@ missing stylesheet, an unresolvable alias, invalid Sass, and similar edge cases 
   fixture alongside existing ones rather than inlining large CSS/SCSS strings in the test file.
 - Keep rule behavior conservative: when in doubt, skip a check rather than risk a false positive
   (`no-unused-class` deliberately skips modules it can't fully account for; follow that precedent).
-- `less` is an **optional peer dependency**, kept as a devDependency so the tests can compile
-  Less. It must never move into `dependencies`: projects that do not use Less should not
-  download a Less compiler. Import it only through the loader in `src/core/less-compiler.ts`.
+- `sass`, `less`, and `typescript` are **optional peer dependencies**, kept as devDependencies so
+  the tests can exercise them. None of them may move into `dependencies`: a project should not
+  download a compiler it does not use. Two rules follow from that, and both are enforced by tests:
+  - Reach them only through their loader (`src/core/sass-compiler.ts`,
+    `src/core/less-compiler.ts`, `src/core/typescript-loader.ts`). A static top-level `import`
+    turns a missing optional peer into a crash at require time.
+  - Never name them in a type that can reach the published `.d.ts`. Each compiler module declares
+    a local structural subset of the API it uses for exactly this reason; a consumer without the
+    package installed still has to be able to run `tsc`. The
+    "keeps optional peer dependencies out of the published type surface" test walks the
+    declaration graph from `dist/src/index.d.ts` and fails on any leak.
 - Rules must stay read-only — no writing files, running subprocesses, or executing `eval`. See
   [`SECURITY.md`](SECURITY.md) for the threat model this plugin operates under.
 - Update `README.md` when you change an option, a rule's behavior, or the CLI, and add an entry to

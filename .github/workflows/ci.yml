@@ -44,3 +44,31 @@ jobs:
       - run: npm ci
       - run: npm run test:coverage
       - run: npm run pack:check
+
+  # The unit tests simulate a missing compiler through the loader seams, but devDependencies hide
+  # the packaging half of the promise: a stray top-level `import 'sass'` would still pass them.
+  # Only a real install into a project that has none of the optional peers proves it.
+  optional-peers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Lint plain CSS Modules with no compilers installed
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          mkdir consumer && cd consumer
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund eslint "$RUNNER_TEMP"/eslint-plugin-css-modules-guard-*.tgz
+          test ! -d node_modules/sass
+          test ! -d node_modules/less
+          printf "import cssModules from 'eslint-plugin-css-modules-guard';\nexport default [cssModules.configs.recommended];\n" > eslint.config.mjs
+          printf ".root {}\n.primary {}\n" > Button.module.css
+          printf "import styles from './Button.module.css';\nstyles.root;\nstyles.primary;\n" > Button.js
+          npx eslint Button.js

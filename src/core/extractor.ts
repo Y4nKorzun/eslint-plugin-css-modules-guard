@@ -1,20 +1,13 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { extname } from 'node:path';
 
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
-import * as sass from 'sass';
 
 import { compileLessStylesheet } from './less-compiler.js';
-import {
-  isInsideOrEqual,
-  isSafeProjectFile,
-  resolveAliasedPaths,
-  resolveStylesheet,
-  safeLoadPaths,
-} from './resolver.js';
+import { isSafeProjectFile, resolveStylesheet } from './resolver.js';
+import { compileSassStylesheet } from './sass-compiler.js';
 import type { ExtractionResult, ExtractorOptions, LocalsConvention } from './types.js';
 
 interface Composition {
@@ -46,8 +39,6 @@ interface CompiledStylesheet {
   hasExtend: boolean;
 }
 
-const SAFE_SASS_URL_SCHEME = 'css-modules-real:';
-const SASS_EXTENSIONS = ['.scss', '.sass', '.css'];
 const extractionCache = new Map<string, CacheEntry>();
 
 function hashFile(filePath: string): string | undefined {
@@ -86,211 +77,6 @@ function remember(key: string, entry: CacheEntry, cacheLimit: number): void {
   trimCache(cacheLimit);
 }
 
-function sassSyntax(filePath: string): sass.Syntax {
-  const extension = extname(filePath).toLowerCase();
-  if (extension === '.sass') {
-    return 'indented';
-  }
-  if (extension === '.css') {
-    return 'css';
-  }
-
-  return 'scss';
-}
-
-function sassCandidates(candidate: string): string[] {
-  const extension = extname(candidate).toLowerCase();
-  const directory = dirname(candidate);
-  const baseName = basename(candidate);
-  const names: string[] = [];
-  const addWithPartial = (filePath: string): void => {
-    names.push(filePath);
-    if (!basename(filePath).startsWith('_')) {
-      names.push(join(dirname(filePath), `_${basename(filePath)}`));
-    }
-  };
-
-  if (SASS_EXTENSIONS.includes(extension)) {
-    addWithPartial(candidate);
-  } else {
-    for (const sassExtension of SASS_EXTENSIONS) {
-      addWithPartial(`${candidate}${sassExtension}`);
-      names.push(join(candidate, `index${sassExtension}`));
-      names.push(join(candidate, `_index${sassExtension}`));
-    }
-  }
-
-  return [...new Set(names)];
-}
-
-function resolveSafeSassFile(candidate: string, options: ExtractorOptions): string | undefined {
-  const matches = sassCandidates(candidate).flatMap((filePath) => {
-    const safeFile = isSafeProjectFile(filePath, options.rootDir);
-    return safeFile ? [safeFile] : [];
-  });
-
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-function customSassUrl(filePath: string): URL {
-  return new URL(`${SAFE_SASS_URL_SCHEME}//${pathToFileURL(filePath).pathname}`);
-}
-
-function pathFromCustomSassUrl(url: URL): string | undefined {
-  if (url.protocol !== SAFE_SASS_URL_SCHEME) {
-    return undefined;
-  }
-
-  try {
-    return decodeURIComponent(url.pathname);
-  } catch {
-    return undefined;
-  }
-}
-
-interface ResolvedSassReference {
-  candidate: string;
-  importer: string;
-  specifier: string;
-}
-
-function resolvedSassReference(
-  url: string,
-  entryPath: string,
-  resolvedFiles: ReadonlySet<string>,
-): ResolvedSassReference | undefined {
-  const parsedUrl = new URL(url);
-  const candidate = parsedUrl.protocol === 'file:'
-    ? fileURLToPath(parsedUrl)
-    : pathFromCustomSassUrl(parsedUrl)!;
-
-  const sourceFiles = parsedUrl.protocol === 'file:' ? [entryPath] : [...resolvedFiles];
-  const importer = sourceFiles
-    .filter((source) => isInsideOrEqual(dirname(source), candidate))
-    .sort((left, right) => right.length - left.length)[0];
-  if (!importer) {
-    return undefined;
-  }
-
-  const specifier = relative(dirname(importer), candidate);
-  if (!specifier || specifier === '..' || specifier.startsWith(`..${sep}`)) {
-    return undefined;
-  }
-
-  return { candidate, importer, specifier };
-}
-
-export function safeSassImporter(
-  entryPath: string,
-  options: ExtractorOptions,
-  dependencies: Set<string>,
-): sass.Importer<'sync'> {
-  const loadPaths = safeLoadPaths(options);
-  const resolvedFiles = new Set([entryPath]);
-  const rememberSassFile = (safeFile: string): URL => {
-    dependencies.add(safeFile);
-    resolvedFiles.add(safeFile);
-    return customSassUrl(safeFile);
-  };
-
-  return {
-    canonicalize(url, context) {
-      if (url.startsWith(SAFE_SASS_URL_SCHEME)) {
-        const candidate = pathFromCustomSassUrl(new URL(url));
-        if (!candidate || !isInsideOrEqual(options.rootDir, candidate)) {
-          throw new Error('Sass imports must stay inside the project root.');
-        }
-        const safeFile = resolveSafeSassFile(candidate, options);
-        if (safeFile) {
-          return rememberSassFile(safeFile);
-        }
-      }
-
-      if (url.startsWith('sass:')) {
-        return null;
-      }
-
-      let localCandidate: string;
-      let resolvingDirectory = dirname(entryPath);
-      let resolvingFile = entryPath;
-      let normalizedReference: ResolvedSassReference | undefined;
-      if (url.startsWith('file:')) {
-        normalizedReference = resolvedSassReference(url, entryPath, resolvedFiles);
-        localCandidate = normalizedReference?.candidate ?? fileURLToPath(url);
-        if (normalizedReference) {
-          resolvingFile = normalizedReference.importer;
-          resolvingDirectory = dirname(resolvingFile);
-        }
-      } else if (url.startsWith(SAFE_SASS_URL_SCHEME)) {
-        normalizedReference = resolvedSassReference(url, entryPath, resolvedFiles);
-        if (!normalizedReference) {
-          throw new Error('Unable to resolve a local Sass import.');
-        }
-        localCandidate = normalizedReference.candidate;
-        resolvingFile = normalizedReference.importer;
-        resolvingDirectory = dirname(resolvingFile);
-      } else if (context.containingUrl?.protocol === SAFE_SASS_URL_SCHEME) {
-        const containingFile = pathFromCustomSassUrl(context.containingUrl);
-        if (!containingFile) {
-          throw new Error('Unable to resolve a Sass import.');
-        }
-        resolvingDirectory = dirname(containingFile);
-        resolvingFile = containingFile;
-        localCandidate = resolve(resolvingDirectory, url);
-      } else if (context.containingUrl?.protocol === 'file:') {
-        resolvingFile = fileURLToPath(context.containingUrl);
-        resolvingDirectory = dirname(resolvingFile);
-        localCandidate = resolve(resolvingDirectory, url);
-      } else if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
-        throw new Error('Only local Sass imports are supported.');
-      } else {
-        localCandidate = resolve(dirname(entryPath), url);
-      }
-
-      if (!isInsideOrEqual(options.rootDir, localCandidate)) {
-        throw new Error('Sass imports must stay inside the project root.');
-      }
-
-      const specifier = normalizedReference?.specifier ?? url;
-      const aliases = !specifier.startsWith('.') && !specifier.startsWith('file:')
-        ? resolveAliasedPaths(resolvingFile, specifier, options)
-        : { candidates: [], dependencies: [] };
-      for (const dependency of aliases.dependencies) {
-        dependencies.add(dependency);
-      }
-
-      const candidates = [...aliases.candidates, localCandidate];
-      const loadPathReference = relative(resolvingDirectory, localCandidate);
-      if (!loadPathReference.startsWith(`..${sep}`) && loadPathReference !== '..') {
-        candidates.push(...loadPaths.map((loadPath) => resolve(loadPath, loadPathReference)));
-      }
-
-      for (const candidate of new Set(candidates)) {
-        const safeFile = resolveSafeSassFile(candidate, options);
-        if (safeFile) {
-          return rememberSassFile(safeFile);
-        }
-      }
-
-      throw new Error('Unable to resolve a local Sass import.');
-    },
-    load(canonicalUrl) {
-      const filePath = pathFromCustomSassUrl(canonicalUrl);
-      const safeFile = filePath && isSafeProjectFile(filePath, options.rootDir);
-      if (!safeFile) {
-        throw new Error('Sass imports must stay inside the project root.');
-      }
-
-      dependencies.add(safeFile);
-      return {
-        contents: readFileSync(safeFile, 'utf8'),
-        syntax: sassSyntax(safeFile),
-        sourceMapUrl: pathToFileURL(safeFile),
-      };
-    },
-  };
-}
-
 export type StylesheetLanguage = 'css' | 'less' | 'sass';
 
 export function stylesheetLanguage(filePath: string): StylesheetLanguage {
@@ -315,24 +101,20 @@ function compilePlainStylesheet(
     : undefined;
 }
 
-function compileSassStylesheet(
+function compileSassStylesheetEntry(
   filePath: string,
   options: ExtractorOptions,
 ): CompiledStylesheet | undefined {
-  const dependencies = new Set([filePath]);
-  const result = sass.compileString(readFileSync(filePath, 'utf8'), {
-    url: pathToFileURL(filePath),
-    importer: safeSassImporter(filePath, options, dependencies),
-    style: 'expanded',
-    syntax: sassSyntax(filePath),
-    logger: sass.Logger.silent,
-  });
+  const compiled = compileSassStylesheet(filePath, options);
+  if (!compiled) {
+    return undefined;
+  }
 
-  const hasExtend = [...dependencies].some(
+  const hasExtend = [...compiled.dependencies].some(
     (dependency) => /\.(?:scss|sass)$/i.test(dependency) && /@extend\b/.test(readFileSync(dependency, 'utf8')),
   );
-  const fingerprints = fingerprintDependencies([...dependencies], options.rootDir);
-  return fingerprints ? { css: result.css, dependencies: fingerprints, hasExtend } : undefined;
+  const fingerprints = fingerprintDependencies([...compiled.dependencies], options.rootDir);
+  return fingerprints ? { css: compiled.css, dependencies: fingerprints, hasExtend } : undefined;
 }
 
 function compileLessStylesheetEntry(
@@ -358,7 +140,7 @@ export function compileStylesheet(
   try {
     switch (stylesheetLanguage(filePath)) {
       case 'sass':
-        return compileSassStylesheet(filePath, options);
+        return compileSassStylesheetEntry(filePath, options);
       case 'less':
         return compileLessStylesheetEntry(filePath, options);
       default:

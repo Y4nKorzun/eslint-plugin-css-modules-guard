@@ -1,8 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import ts from 'typescript';
-
+import { isTypeScriptAvailable, loadTypeScript } from './typescript-loader.js';
 import type { ExtractorOptions, ResolvedStylesheet } from './types.js';
 
 interface AliasMapping {
@@ -158,8 +157,15 @@ function readTsconfigAliases(
     return undefined;
   }
 
+  // Without the optional `typescript` peer there is no JSONC parser, so tsconfig aliases simply do
+  // not contribute. Explicit `aliases` keep working; `needsTypeScriptForAliases` explains the gap.
+  const typescript = loadTypeScript();
+  if (!typescript) {
+    return undefined;
+  }
+
   try {
-    const parsed = ts.parseConfigFileTextToJson(safeConfig, readFileSync(safeConfig, 'utf8'));
+    const parsed = typescript.parseConfigFileTextToJson(safeConfig, readFileSync(safeConfig, 'utf8'));
     const config = parsed.config as {
       extends?: unknown;
       compilerOptions?: { baseUrl?: unknown; paths?: unknown };
@@ -210,6 +216,15 @@ function readTsconfigAliases(
 function tsconfigAliases(directory: string, rootDir: string): TsconfigAliases | undefined {
   const configPath = findNearestTsconfig(directory, rootDir);
   return configPath ? readTsconfigAliases(configPath, rootDir) : undefined;
+}
+
+/**
+ * True when a `tsconfig.json` sits above the importing file but `typescript` is not installed to
+ * read it. An alias that `compilerOptions.paths` would have resolved fails without any hint
+ * otherwise, which looks exactly like a genuinely missing stylesheet.
+ */
+export function needsTypeScriptForAliases(importer: string, rootDir: string): boolean {
+  return !isTypeScriptAvailable() && findNearestTsconfig(dirname(importer), rootDir) !== undefined;
 }
 
 function explicitAliases(options: ExtractorOptions): AliasMapping[] {
