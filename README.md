@@ -184,10 +184,15 @@ styles['card--active'];
 ```
 
 Less can execute JavaScript through its `@plugin` directive and inline backticks. Both are
-refused, and only `.less` and `.css` files inside the project are ever handed to the compiler.
-That last part is why `data-uri()` and `image-size()` do not resolve images: Less inlines the bytes
-of whatever it reads, and interpolation can turn them into a class name. `data-uri()` degrades to
-a plain `url(...)` and leaves class names unaffected.
+refused, and only `.less` and `.css` files inside the project are ever handed to the compiler:
+Less inlines the bytes of whatever it reads, and selector interpolation can turn them into a class
+name, so a stylesheet must not be able to read `.env` or a `.js` file.
+
+That has one visible cost. `data-uri()` no longer inlines an image and degrades to a plain
+`url(...)`, which is harmless — the stylesheet still compiles and exposes the same class names.
+`image-size()` has no such fallback in Less, so a stylesheet that calls it does not compile and is
+reported by `unresolvable-stylesheet`. If you need it, keep those rules out of `.module.less` files
+and in a plain stylesheet your build compiles.
 
 Only local project files are followed. Paths outside the project root, symlink escapes,
 `node_modules` composition, remote URLs, and package imports are rejected, for Sass and Less
