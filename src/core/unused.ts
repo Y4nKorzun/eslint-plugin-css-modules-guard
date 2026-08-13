@@ -1,11 +1,13 @@
 import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import ts from 'typescript';
+import type ts from 'typescript';
 
 import { extractClasses, usedLocalClasses } from './extractor.js';
 import { normalizeOptions } from './options.js';
 import { isCssModuleSpecifier, isInsideOrEqual, resolveStylesheet } from './resolver.js';
+import { loadTypeScript } from './typescript-loader.js';
+import type { TypeScriptModule } from './typescript-loader.js';
 import type { CssModulesOptions, ExtractorOptions } from './types.js';
 
 export interface UnusedCheckOptions extends CssModulesOptions {
@@ -21,6 +23,8 @@ export interface UnusedClass {
 export interface UnusedClassesResult {
   incomplete: boolean;
   unused: UnusedClass[];
+  /** Why the scan could not finish, when that reason is worth showing instead of a generic one. */
+  reason?: string;
 }
 
 interface Usage {
@@ -108,18 +112,18 @@ function collectFiles(
   return { files: [...new Set(files)].sort(), incomplete };
 }
 
-function scriptKind(filePath: string): ts.ScriptKind {
+function scriptKind(typescript: TypeScriptModule, filePath: string): ts.ScriptKind {
   switch (extname(filePath).toLowerCase()) {
     case '.tsx':
-      return ts.ScriptKind.TSX;
+      return typescript.ScriptKind.TSX;
     case '.jsx':
-      return ts.ScriptKind.JSX;
+      return typescript.ScriptKind.JSX;
     case '.js':
     case '.mjs':
     case '.cjs':
-      return ts.ScriptKind.JS;
+      return typescript.ScriptKind.JS;
     default:
-      return ts.ScriptKind.TS;
+      return typescript.ScriptKind.TS;
   }
 }
 
@@ -134,14 +138,19 @@ function usageFor(usages: Map<string, Usage>, stylesheet: string): Usage {
   return created;
 }
 
-function staticElementName(node: ts.ElementAccessExpression): string | undefined {
+function staticElementName(
+  typescript: TypeScriptModule,
+  node: ts.ElementAccessExpression,
+): string | undefined {
   const argument = node.argumentExpression;
-  return argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))
+  return argument &&
+    (typescript.isStringLiteral(argument) || typescript.isNoSubstitutionTemplateLiteral(argument))
     ? argument.text
     : undefined;
 }
 
 function scanSourceFile(
+  typescript: TypeScriptModule,
   filePath: string,
   options: ExtractorOptions,
   usages: Map<string, Usage>,
@@ -153,12 +162,12 @@ function scanSourceFile(
     return false;
   }
 
-  const source = ts.createSourceFile(
+  const source = typescript.createSourceFile(
     filePath,
     sourceText,
-    ts.ScriptTarget.Latest,
+    typescript.ScriptTarget.Latest,
     true,
-    scriptKind(filePath),
+    scriptKind(typescript, filePath),
   );
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] })
     .parseDiagnostics;
@@ -168,7 +177,10 @@ function scanSourceFile(
 
   const imports = new Map<string, ImportedBinding>();
   for (const statement of source.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+    if (
+      !typescript.isImportDeclaration(statement) ||
+      !typescript.isStringLiteral(statement.moduleSpecifier)
+    ) {
       continue;
     }
 
@@ -185,15 +197,21 @@ function scanSourceFile(
   }
 
   const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
+    if (
+      typescript.isPropertyAccessExpression(node) &&
+      typescript.isIdentifier(node.expression)
+    ) {
       const imported = imports.get(node.expression.text);
       if (imported) {
         usageFor(usages, imported.stylesheet).classes.add(node.name.text);
       }
-    } else if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression)) {
+    } else if (
+      typescript.isElementAccessExpression(node) &&
+      typescript.isIdentifier(node.expression)
+    ) {
       const imported = imports.get(node.expression.text);
       if (imported) {
-        const className = staticElementName(node);
+        const className = staticElementName(typescript, node);
         const usage = usageFor(usages, imported.stylesheet);
         if (className) {
           usage.classes.add(className);
@@ -201,19 +219,21 @@ function scanSourceFile(
           usage.all = true;
         }
       }
-    } else if (ts.isIdentifier(node)) {
+    } else if (typescript.isIdentifier(node)) {
       const imported = imports.get(node.text);
       if (imported && node !== imported.binding) {
         const parent = node.parent;
-        const isPropertyObject = ts.isPropertyAccessExpression(parent) && parent.expression === node;
-        const isElementObject = ts.isElementAccessExpression(parent) && parent.expression === node;
+        const isPropertyObject = typescript.isPropertyAccessExpression(parent) &&
+          parent.expression === node;
+        const isElementObject = typescript.isElementAccessExpression(parent) &&
+          parent.expression === node;
         if (!isPropertyObject && !isElementObject) {
           usageFor(usages, imported.stylesheet).all = true;
         }
       }
     }
 
-    ts.forEachChild(node, visit);
+    typescript.forEachChild(node, visit);
   };
 
   visit(source);
@@ -221,6 +241,17 @@ function scanSourceFile(
 }
 
 export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResult {
+  // Every class looks unused when no source file can be read, so a missing parser has to fail the
+  // whole scan rather than degrade it into a wall of false positives.
+  const typescript = loadTypeScript();
+  if (!typescript) {
+    return {
+      incomplete: true,
+      unused: [],
+      reason: 'Install the optional peer dependency "typescript" to scan source files.',
+    };
+  }
+
   const rootDir = realpathSync(input.rootDir);
   const { rootDir: _rootDir, paths, ...ruleOptions } = input;
   const options = normalizeOptions(ruleOptions, rootDir);
@@ -231,7 +262,7 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResul
   let scanWasIncomplete = collection.incomplete;
 
   for (const filePath of files) {
-    if (isSourceFile(filePath) && !scanSourceFile(filePath, options, usages)) {
+    if (isSourceFile(filePath) && !scanSourceFile(typescript, filePath, options, usages)) {
       scanWasIncomplete = true;
     }
   }

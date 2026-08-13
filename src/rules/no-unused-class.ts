@@ -1,9 +1,10 @@
-import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
+import { TSESTree } from '@typescript-eslint/utils';
 
 import { extractClasses, usedLocalClasses } from '../core/extractor.js';
 import { normalizeOptions } from '../core/options.js';
 import { isCssModuleSpecifier, resolveStylesheet } from '../core/resolver.js';
 import { cssModulesOptionsSchema } from '../core/schema.js';
+import { createRule } from './create-rule.js';
 import type { CssModulesOptions, ExtractionResult } from '../core/types.js';
 
 type Options = readonly [CssModulesOptions?];
@@ -14,10 +15,6 @@ interface ImportedModule {
   extracted: ExtractionResult;
   stylesheet: string;
 }
-
-const createRule = ESLintUtils.RuleCreator(
-  (name) => `https://www.npmjs.com/package/eslint-plugin-css-modules-guard#rule-css-modules${name}`,
-);
 
 type PropertyKey = TSESTree.MemberExpression['property'] | TSESTree.Property['key'];
 

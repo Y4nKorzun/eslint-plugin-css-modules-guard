@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-13
+
+First stable release. Rule behavior, plugin options, and CLI exit codes are now covered by semantic
+versioning.
+
+### Changed
+
+- **Breaking.** `sass` and `typescript` moved from `dependencies` to **optional**
+  `peerDependencies`, joining `less`. A project installs only the compilers it actually uses;
+  `.module.css` needs none of them. This is the one change that had to land in a major release,
+  which is why 1.0.0 carries it.
+- **Breaking.** The `typescript` peer range is `>=4.8.4 <6.1.0`, matching what
+  `@typescript-eslint/utils` already requires. The previous `dependencies` entry pinned `^5.0.0`,
+  which installed a second, nested TypeScript in any project already on TypeScript 6.
+
+  Measured `node_modules` for a project with only `eslint` and this plugin:
+
+  | Project | 0.9.0 | 1.0.0 |
+  | --- | --- | --- |
+  | Plain `.module.css` | 47 MB | 40 MB |
+  | On TypeScript 6 | 71 MB, two copies of TypeScript | 40 MB, one copy |
+
+- Rule documentation URLs point at `docs/rules/<name>.md`. The previous URLs pointed at a README
+  anchor that never existed, so every editor's "open documentation for this rule" link landed on
+  the top of the npm page instead.
+
+### Added
+
+- `unresolvable-stylesheet` reports a missing `sass` the way it already reported a missing `less`:
+  a `.module.scss` or `.module.sass` import now earns an install hint rather than a bare
+  `Unable to compile`. A genuine compile error still gets the generic message.
+- `unresolvable-stylesheet` reports a missing `typescript` when an alias-shaped import fails to
+  resolve next to a `tsconfig.json` that no parser could read - previously indistinguishable from
+  a genuinely missing file.
+- Per-rule documentation in `docs/rules/`, shipped with the package.
+- `css-modules-lint` explains an incomplete scan when it can name the cause. In `--format json`
+  the new `reason` field appears **only** in that case, so the JSON shape a CI job already parses
+  is unchanged for every other incomplete scan.
+
+### Fixed
+
+- Rule documentation links. Every editor's "open documentation for this rule" action pointed at a
+  README anchor that never existed and landed on the top of the npm page instead.
+
+### Upgrade note
+
+**Install the compilers your project uses.** Nothing changes for `.module.css`:
+
+```sh
+npm install --save-dev sass          # ^1.45.0 - .module.scss and .module.sass
+npm install --save-dev less          # ^4.0.0  - .module.less
+npm install --save-dev typescript    # aliases read from tsconfig.json compilerOptions.paths
+```
+
+The Sass range starts at `1.45.0`, the release that introduced the modern JavaScript API this
+plugin compiles through. Declaring `^1.0.0` would let npm accept a copy that cannot compile
+anything - harmless while `sass` was a regular dependency and npm always installed a current one,
+but not once the project picks the version. An older copy is also treated as absent at runtime, so
+it earns the install hint instead of an unexplained compile failure.
+
+Most projects already have `typescript` through `@typescript-eslint/utils`, which declares it as a
+non-optional peer, so only Sass users are likely to need a new install.
+
+A project that skips a compiler it needs does not fail quietly. Each affected import is reported
+by `unresolvable-stylesheet` with the exact package to install, and `no-unknown-class` stays silent
+on those modules rather than inventing unknown classes. Without `typescript`, `css-modules-lint`
+exits `2` (`incomplete`) and prints the reason instead of claiming a clean result.
+
 ## [0.9.0] - 2026-08-13
 
 ### Added
@@ -142,7 +210,8 @@ stylesheets. Install `less` or exclude those paths.
 - Initial release: `css-modules/no-unknown-class` and `css-modules/unresolvable-stylesheet` rules
   for ESLint 9 flat config, reading local `.module.css`, `.module.scss`, and `.module.sass` files.
 
-[Unreleased]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.0...v0.8.1

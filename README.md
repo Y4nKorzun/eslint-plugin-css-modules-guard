@@ -17,15 +17,30 @@ Requires Node.js 20.19+ and ESLint 9 or 10.
 npm install --save-dev eslint eslint-plugin-css-modules-guard
 ```
 
-Sass support is built in. Less support needs the `less` compiler, which is an optional peer
-dependency, so only projects that use it pay for it:
+That is everything `.module.css` needs. Compilers are **optional peer dependencies**, so a project
+only pays for the ones it actually uses:
 
-```sh
-npm install --save-dev less
+| Install | Enables | Range |
+| --- | --- | --- |
+| `npm install --save-dev sass` | `.module.scss` and `.module.sass` | `^1.45.0` |
+| `npm install --save-dev less` | `.module.less` | `^4.0.0` |
+| `npm install --save-dev typescript` | Aliases read from `compilerOptions.paths` in `tsconfig.json` | `>=4.8.4 <6.1.0` |
+
+Sass is `1.45.0` and up because that is where Dart Sass introduced the modern JavaScript API this
+plugin compiles through.
+
+Most projects already have `typescript` in the tree: `@typescript-eslint/utils` requires it.
+
+Nothing fails quietly when a compiler is absent. The import is reported by
+`unresolvable-stylesheet` with the exact package to install, and `no-unknown-class` stays silent on
+that module rather than inventing unknown classes:
+
+```text
+Unable to compile CSS Module "./Card.module.scss". Install the optional peer dependency "sass" to lint .module.scss and .module.sass files
 ```
 
-Without `less` installed, a `.module.less` import is reported by `unresolvable-stylesheet` with an
-install hint rather than being checked or silently skipped.
+A real compile error still gets the plain `Unable to compile` message, so a broken stylesheet is
+never mistaken for a missing package.
 
 ## Quick start
 
@@ -63,9 +78,9 @@ ESLint exposes that correction as a suggestion; the plugin never changes source 
 
 | Rule | Included | What it catches |
 | --- | --- | --- |
-| `css-modules/no-unknown-class` | Yes | Static dot, bracket, template-literal, and destructured names that do not exist in the module |
-| `css-modules/unresolvable-stylesheet` | Yes | A CSS Module import that is missing, outside the project, unsafe, cannot compile, or needs a compiler that is not installed |
-| `css-modules/no-unused-class` | No | Local classes unused by one source file; enable only when that ownership rule is true |
+| [`css-modules/no-unknown-class`](docs/rules/no-unknown-class.md) | Yes | Static dot, bracket, template-literal, and destructured names that do not exist in the module |
+| [`css-modules/unresolvable-stylesheet`](docs/rules/unresolvable-stylesheet.md) | Yes | A CSS Module import that is missing, outside the project, unsafe, cannot compile, or needs a compiler that is not installed |
+| [`css-modules/no-unused-class`](docs/rules/no-unused-class.md) | No | Local classes unused by one source file; enable only when that ownership rule is true |
 
 `no-unknown-class` also accepts ICSS `:export` values, classes composed from local modules, and classes declared inside `:global()`. Dynamic access such as `styles[variant]` is deliberately skipped rather than guessed.
 
@@ -124,7 +139,7 @@ Use `localsConvention` to match your CSS loader. For a class named `.card-title`
 
 ## Aliases, Sass, and Less
 
-The plugin automatically reads `compilerOptions.paths` from the nearest local `tsconfig.json`, including safe local `extends` files and project references.
+The plugin automatically reads `compilerOptions.paths` from the nearest local `tsconfig.json`, including safe local `extends` files and project references. This uses the optional `typescript` peer dependency; without it, tsconfig aliases simply do not contribute and `aliases` below is the supported fallback.
 
 ```json
 // tsconfig.json
@@ -146,7 +161,7 @@ import styles from '@styles/Button.module.scss';
 
 Vite and webpack configuration is intentionally not read or executed. If an alias exists only there, repeat its local mapping in `aliases` as shown in the configuration example above.
 
-Sass modules are compiled with Dart Sass before selector extraction. Nesting, mixins, local `@use` / `@forward`, static interpolation, and local `composes` therefore resolve to the selectors the module exposes.
+Sass modules are compiled with Dart Sass (the optional `sass` peer dependency) before selector extraction. Nesting, mixins, local `@use` / `@forward`, static interpolation, and local `composes` therefore resolve to the selectors the module exposes.
 
 ```scss
 /* Card.module.scss */
@@ -266,6 +281,11 @@ It exits with:
 | `0` | No unused classes found |
 | `1` | Unused classes found |
 | `2` | The scan was incomplete or its input was invalid; no clean result is claimed |
+
+The CLI parses source files with the optional `typescript` peer dependency. Without it every class
+would look unused, so the scan exits `2` and says why instead of reporting false positives. When
+the cause can be named it is printed, and `--format json` carries it in a `reason` field that
+appears only in that case.
 
 Use JSON in CI or pass the same alias and Sass settings when needed:
 

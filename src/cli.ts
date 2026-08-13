@@ -132,9 +132,18 @@ export function runCli(args: readonly string[], write: (output: string) => void 
     const rootDir = realpathSync(resolve(parsed.rootDir));
     const result = findUnusedClasses({ ...parsed, rootDir });
     if (result.incomplete) {
+      // `reason` only appears when the scan can name a specific cause, so the JSON shape a CI job
+      // already parses stays exactly as it was for every other incomplete scan.
+      const message = ['Unable to complete unused CSS Module class scan.', result.reason]
+        .filter(Boolean)
+        .join(' ');
       write(parsed.format === 'json'
-        ? JSON.stringify({ unused: [], incomplete: true }, undefined, 2)
-        : 'Unable to complete unused CSS Module class scan.');
+        ? JSON.stringify(
+          { unused: [], incomplete: true, ...(result.reason ? { reason: message } : {}) },
+          undefined,
+          2,
+        )
+        : message);
       return 2;
     }
 
