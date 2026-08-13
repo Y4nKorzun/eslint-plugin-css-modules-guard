@@ -11,7 +11,7 @@ It compiles Sass and Less before checking selectors, understands local `composes
 
 ## Install
 
-Requires Node.js 20+ and ESLint 9 or 10.
+Requires Node.js 20.19+ and ESLint 9 or 10.
 
 ```sh
 npm install --save-dev eslint eslint-plugin-css-modules-guard

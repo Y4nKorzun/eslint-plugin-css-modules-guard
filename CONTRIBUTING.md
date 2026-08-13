@@ -6,7 +6,7 @@
 npm ci
 ```
 
-Requires Node.js 20+. `npm run test:coverage` additionally requires **Node.js 22.5+**: it passes
+Requires Node.js 20.19+ (the floor the `sass` dependency itself declares). `npm run test:coverage` additionally requires **Node.js 22.5+**: it passes
 `--test-coverage-exclude` (added in Node v22.5.0) to keep the test file itself out of the
 function-coverage numbers, and Node 20 rejects the unknown flag outright. On Node 20 run
 `npm test`; CI enforces the coverage gate on Node 24.

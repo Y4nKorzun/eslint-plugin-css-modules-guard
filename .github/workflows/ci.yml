@@ -15,9 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # package.json declares "engines.node": ">=20" and
-        # "peerDependencies.eslint": "^9.0.0 || ^10.0.0" - cover both ends of each range.
-        node-version: ['20', '22', '24']
+        # Both ends of each declared range. The Node floor is pinned exactly rather than
+        # written '20': that resolves to the newest 20.x, which would never exercise the
+        # floor engines.node actually promises.
+        node-version: ['20.19.0', '22', '24']
         eslint-version: ['9', '10']
     steps:
       - uses: actions/checkout@v6

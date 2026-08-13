@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--load-path`. Both keep working and are merged, so no configuration change is required.
 - `ExtractionResult.hasSassExtend` is deprecated in favour of `hasExtend`, which also covers Less
   `:extend()`. Both fields are populated.
+- `engines.node` is now `>=20.19.0`, correcting a `>=20` that the dependency tree never
+  supported: `sass` declares `>=20.19.0`. The plugin does run on Node 20.18, but installing it
+  there produces an `EBADENGINE` warning and fails outright under `engine-strict`. CI now pins
+  the floor exactly instead of resolving `20` to the newest 20.x, which hid this.
 - `npm run test:coverage` now passes `--test-coverage-exclude`, so the 100% gate no longer depends
   on a Node 24 default. That script requires Node 22.5+; the package still supports Node 20+.
 
