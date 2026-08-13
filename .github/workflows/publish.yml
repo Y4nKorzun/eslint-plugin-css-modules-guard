@@ -6,7 +6,9 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  # contents: write is needed to create the GitHub release below; the npm publish itself only
+  # needs id-token for trusted publishing.
+  contents: write
   id-token: write
 
 jobs:
@@ -21,4 +23,35 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm run test:coverage
+      - name: Check the tag matches the package version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          packaged="$(node -p 'require("./package.json").version')"
+          if [ "$tagged" != "$packaged" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $packaged" >&2
+            exit 1
+          fi
       - run: npm publish
+      # After publishing, so a failed publish never leaves a release announcing it.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v heading="## [${GITHUB_REF_NAME#v}]" '
+            index($0, heading) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { lines[n++] = $0 }
+            END {
+              first = 0; while (first < n && lines[first] ~ /^[[:space:]]*$/) first++
+              last = n - 1; while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+              if (last < first) exit 1
+              for (i = first; i <= last; i++) print lines[i]
+            }
+          ' CHANGELOG.md > release-notes.md || {
+            echo "No CHANGELOG.md section for $GITHUB_REF_NAME" >&2
+            exit 1
+          }
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag

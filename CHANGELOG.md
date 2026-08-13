@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there produces an `EBADENGINE` warning and fails outright under `engine-strict`. CI now pins
   the floor exactly instead of resolving `20` to the newest 20.x, which hid this.
 - `npm run test:coverage` now passes `--test-coverage-exclude`, so the 100% gate no longer depends
-  on a Node 24 default. That script requires Node 22.5+; the package still supports Node 20+.
+  on a Node 24 default. That script requires Node 22.5+; the package itself supports Node 20.19+.
 
 ### Security
 
