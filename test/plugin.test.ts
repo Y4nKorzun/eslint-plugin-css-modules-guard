@@ -19,8 +19,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import test, { mock } from 'node:test';
 
 import { ESLint } from 'eslint';
+import * as typescriptParser from '@typescript-eslint/parser';
 
 import { runCli, runCliFromProcess } from '../src/cli.js';
+import { concatenateCandidates, unionCandidates } from '../src/core/candidates.js';
 import {
   clearExtractionCache,
   compileStylesheet,
@@ -39,9 +41,11 @@ import {
   resolveStylesheet,
 } from '../src/core/resolver.js';
 import { isSassAvailable, safeSassImporter, setSassLoader } from '../src/core/sass-compiler.js';
-import { isTypeScriptAvailable, setTypeScriptLoader } from '../src/core/typescript-loader.js';
+import { typescriptExpressionCandidates } from '../src/core/typescript-candidates.js';
+import { isTypeScriptAvailable, loadTypeScript, setTypeScriptLoader } from '../src/core/typescript-loader.js';
 import { findUnusedClasses, relativeUnusedClasses } from '../src/core/unused.js';
 import plugin from '../src/index.js';
+import { propertyCandidates } from '../src/rules/candidates.js';
 import { noUnknownClass } from '../src/rules/no-unknown-class.js';
 import { noUnusedClass } from '../src/rules/no-unused-class.js';
 import { unresolvableStylesheet } from '../src/rules/unresolvable-stylesheet.js';
@@ -80,10 +84,11 @@ async function lint(
     cwd,
     overrideConfigFile: true,
     overrideConfig: {
-      files: ['**/*'],
+      files: ['**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}'],
       languageOptions: {
         ecmaVersion: 2022,
         sourceType: 'module',
+        ...(/\.(?:ts|tsx|mts|cts)$/.test(filePath) ? { parser: typescriptParser } : {}),
       },
       plugins: {
         'css-modules': {
@@ -196,11 +201,255 @@ test('reports static unknown properties with a correction', async () => {
 
 test('skips dynamic access and shadowed bindings', async () => {
   const messages = await lint(
-    "import styles from './basic.module.css';\nconst size = 'sm';\nstyles[`size_${size}`];\nfunction render(styles) { styles.missing; }",
+    "import styles from './basic.module.css';\nconst size = readSize();\nstyles[`size_${size}`];\nfunction render(styles) { styles.missing; }",
     fixture('Component.js'),
   );
 
   assert.equal(messages.length, 0);
+});
+
+test('checks finite computed CSS Module class candidates', async () => {
+  const messages = await lint([
+    "import styles from './basic.module.css';",
+    "const direct = 'primray';",
+    "const choice = enabled ? 'root' : 'missing';",
+    "const prefix = 'kebab';",
+    "const suffix = compact ? '-case' : '-missing';",
+    'styles[direct];',
+    'styles[choice];',
+    'styles[prefix + suffix];',
+  ].join('\n'), fixture('Component.js'));
+
+  assert.deepEqual(
+    messages.map((message) => message.message.match(/class "([^"]+)"/)?.[1]),
+    ['primray', 'missing', 'kebab-missing'],
+  );
+  assert.equal(messages.every((message) => message.suggestions === undefined), true);
+});
+
+test('checks TypeScript const assertions without type information', async () => {
+  const messages = await lint([
+    "import styles from './basic.module.css';",
+    'declare const enabled: boolean;',
+    "const key = enabled ? ('root' as const) : ('primray' as const);",
+    "const asserted = <const>'primary';",
+    'styles[key];',
+    'styles[asserted];',
+    "styles['kebab-case'];",
+  ].join('\n'), fixture('Component.ts'));
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0]!.message, /Unknown CSS Module class "primray"/);
+  assert.equal(messages[0]!.suggestions, undefined);
+});
+
+test('keeps unproven ESLint candidate expressions indeterminate and bounded', async () => {
+  const bits = Array.from(
+    { length: 9 },
+    (_, index) => `const bit${index} = enabled ? '${index}a' : '${index}b';`,
+  );
+  const depth = ["const depth34 = 'root';"];
+  for (let index = 33; index >= 0; index -= 1) {
+    depth.push(`const depth${index} = depth${index + 1};`);
+  }
+
+  const messages = await lint([
+    "import styles from './basic.module.css';",
+    'declare const enabled: boolean;',
+    'declare const declared: string;',
+    "let mutable = 'root';",
+    "const { pattern } = sourceValue;",
+    "var repeated = 'root';",
+    "var repeated = 'primary';",
+    "const changed = 'root';",
+    "changed = 'primary';",
+    ...bits,
+    ...depth,
+    'styles[globalKey];',
+    'styles[styles];',
+    'styles[declared];',
+    'styles[mutable];',
+    'styles[pattern];',
+    'styles[repeated];',
+    'styles[changed];',
+    'styles[1];',
+    'styles[readKey()];',
+    "styles[enabled ? readKey() : 'root'];",
+    "styles[enabled ? 'root' : readKey()];",
+    "styles['root' - 'primary'];",
+    "styles[readKey() + 'root'];",
+    "styles['root' + readKey()];",
+    'styles[`root_${readKey()}`];',
+    'styles[depth0];',
+    `styles[\`${Array.from({ length: 9 }, (_, index) => `\${bit${index}}`).join('')}\`];`,
+  ].join('\n'), fixture('Component.ts'));
+
+  assert.deepEqual(messages, []);
+});
+
+test('bounds candidate-set expansion and rejects unsupported property shapes', () => {
+  const tooMany = new Set(Array.from({ length: 257 }, (_, index) => `item-${index}`));
+  assert.equal(unionCandidates(new Set(), tooMany), undefined);
+  assert.equal(
+    concatenateCandidates(
+      new Set(Array.from({ length: 17 }, (_, index) => `left-${index}`)),
+      new Set(Array.from({ length: 17 }, (_, index) => `right-${index}`)),
+    ),
+    undefined,
+  );
+  assert.deepEqual([...unionCandidates(new Set(['root']), new Set(['primary']))!], [
+    'root',
+    'primary',
+  ]);
+  assert.deepEqual([...concatenateCandidates(new Set(['size_']), new Set(['sm', 'lg']))!], [
+    'size_sm',
+    'size_lg',
+  ]);
+
+  const emptyScope = () => ({ set: new Map(), upper: null }) as never;
+  assert.equal(propertyCandidates({ type: 'PrivateIdentifier', name: 'secret' } as never, true, emptyScope), undefined);
+  assert.equal(propertyCandidates({
+    expressions: [],
+    quasis: [{ value: { cooked: 'root', raw: 'root' } }],
+    type: 'TemplateLiteral',
+  } as never, false, emptyScope), undefined);
+  assert.deepEqual([...propertyCandidates({
+    expressions: [{ type: 'Literal', value: '-' }],
+    quasis: [
+      { value: { cooked: 'root', raw: 'root' } },
+      { value: { cooked: null, raw: 'raw' } },
+    ],
+    type: 'TemplateLiteral',
+  } as never, true, emptyScope)!], ['root-raw']);
+});
+
+test('resolves and bounds TypeScript candidate expressions through symbols', () => {
+  withTemporaryProject((rootDir) => {
+    const bits = Array.from(
+      { length: 9 },
+      (_, index) => `const bit${index} = flag ? '${index}a' : '${index}b';`,
+    );
+    const depth = ["const depth34 = 'root';"];
+    for (let index = 33; index >= 0; index -= 1) {
+      depth.push(`const depth${index} = depth${index + 1};`);
+    }
+    const eightBits = Array.from({ length: 8 }, (_, index) => `bit${index}`).join(' + ');
+    const nineBitTemplate = Array.from({ length: 9 }, (_, index) => `\${bit${index}}`).join('');
+    const sourcePath = writeProjectFile(rootDir, 'candidates.ts', [
+      'declare const flag: boolean;',
+      "const literal = 'root';",
+      'const alias = literal;',
+      'const noSub = `root`;',
+      "const conditional = flag ? 'root' : 'primary';",
+      "const template = `size_${conditional}`;",
+      "const binary = 'size_' + conditional;",
+      "const parenthesized = ('root');",
+      "const asserted = 'root' as const;",
+      "const angleAsserted = <const>'root';",
+      "const nonNull = literal!;",
+      "let mutable = 'root';",
+      'const viaMutable = mutable;',
+      'const { pattern } = sourceValue;',
+      'const viaPattern = pattern;',
+      "var repeated = 'root';",
+      "var repeated = 'primary';",
+      'const viaRepeated = repeated;',
+      'const missing = globalKey;',
+      'const called = readKey();',
+      "const invalidTrue = flag ? readKey() : 'root';",
+      "const invalidFalse = flag ? 'root' : readKey();",
+      "const multiplied = 'root' * 'primary';",
+      "const invalidLeft = readKey() + 'root';",
+      "const invalidRight = 'root' + readKey();",
+      'const invalidTemplate = `root_${readKey()}`;',
+      'const cycleA = cycleB;',
+      'const cycleB = cycleA;',
+      'const cycle = cycleA;',
+      ...bits,
+      ...depth,
+      'const tooDeep = depth0;',
+      `const tooManyConcat = ${Array.from({ length: 9 }, (_, index) => `bit${index}`).join(' + ')};`,
+      `const maxLeft = 'left' + ${eightBits};`,
+      `const maxRight = 'right' + ${eightBits};`,
+      'const tooManyUnion = flag ? maxLeft : maxRight;',
+      `const tooManyTemplate = \`${nineBitTemplate}\`;`,
+    ].join('\n'));
+
+    const typescript = loadTypeScript();
+    assert.ok(typescript);
+    const program = typescript.createProgram({
+      rootNames: [sourcePath],
+      options: { noLib: true, noResolve: true, target: typescript.ScriptTarget.Latest },
+    });
+    const checker = program.getTypeChecker();
+    const source = program.getSourceFile(sourcePath)!;
+    const initializers = new Map<string, Parameters<typeof typescriptExpressionCandidates>[2]>();
+    for (const statement of source.statements) {
+      if (!typescript.isVariableStatement(statement)) {
+        continue;
+      }
+      for (const declaration of statement.declarationList.declarations) {
+        if (typescript.isIdentifier(declaration.name) && declaration.initializer) {
+          initializers.set(declaration.name.text, declaration.initializer);
+        }
+      }
+    }
+
+    const candidates = (name: string) => {
+      const expression = initializers.get(name);
+      assert.ok(expression, name);
+      return typescriptExpressionCandidates(typescript, checker, expression);
+    };
+
+    assert.deepEqual([...candidates('alias')!], ['root']);
+    assert.deepEqual([...candidates('noSub')!], ['root']);
+    assert.deepEqual([...candidates('conditional')!], ['root', 'primary']);
+    assert.deepEqual([...candidates('template')!], ['size_root', 'size_primary']);
+    assert.deepEqual([...candidates('binary')!], ['size_root', 'size_primary']);
+    for (const name of ['parenthesized', 'asserted', 'angleAsserted', 'nonNull']) {
+      assert.deepEqual([...candidates(name)!], ['root']);
+    }
+    for (const name of [
+      'viaMutable',
+      'viaPattern',
+      'viaRepeated',
+      'missing',
+      'called',
+      'invalidTrue',
+      'invalidFalse',
+      'multiplied',
+      'invalidLeft',
+      'invalidRight',
+      'invalidTemplate',
+      'cycle',
+      'tooDeep',
+      'tooManyConcat',
+      'tooManyUnion',
+      'tooManyTemplate',
+    ]) {
+      assert.equal(candidates(name), undefined, name);
+    }
+  });
+});
+
+test('counts finite computed candidates in no-unused-class without guessing runtime values', async () => {
+  const finiteMessages = await lint([
+    "import styles from './basic.module.css';",
+    "const key = compact ? 'root' : 'primary';",
+    'styles[key];',
+  ].join('\n'), fixture('Component.js'), {}, repositoryRoot, 'no-unused-class');
+
+  assert.equal(finiteMessages.length, 1);
+  assert.match(finiteMessages[0]!.message, /Unused CSS Module class "kebab-case"/);
+
+  const indeterminateMessages = await lint([
+    "import styles from './basic.module.css';",
+    "let key = 'root';",
+    "key = 'primary';",
+    'styles[key];',
+  ].join('\n'), fixture('Component.js'), {}, repositoryRoot, 'no-unused-class');
+
+  assert.deepEqual(indeterminateMessages, []);
 });
 
 test('does not reject explicitly global selectors', async () => {
@@ -1271,7 +1520,7 @@ test('keeps equal-priority Sass alias order in the cache key', () => {
   });
 });
 
-test('finds unused local classes and preserves dynamic module access', () => {
+test('finds unused local classes and resolves finite computed module access', () => {
   const rootDir = fixture('unused');
   const result = findUnusedClasses({ rootDir });
 
@@ -1280,6 +1529,105 @@ test('finds unused local classes and preserves dynamic module access', () => {
     { stylesheet: 'orphan.module.scss', className: 'orphan' },
     { stylesheet: 'used.module.css', className: 'unused' },
   ]);
+});
+
+test('project-wide unused resolves finite TypeScript candidates and exposes indeterminate access', () => {
+  withTemporaryProject((rootDir) => {
+    writeProjectFile(rootDir, 'finite.module.css', [
+      '.size_sm {}',
+      '.size_lg {}',
+      '.unused {}',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'finite.ts', [
+      "import helper from './helper.js';",
+      "import styles from './finite.module.css';",
+      'declare const compact: boolean;',
+      "const prefix = 'size_' as const;",
+      "const size = compact ? ('sm' as const) : ('lg' as const);",
+      'styles[prefix + size];',
+      'void helper;',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'helper.js', 'export default 1;');
+    writeProjectFile(rootDir, 'destructured.module.css', [
+      '.root {}',
+      '.primary {}',
+      '.unused {}',
+    ].join('\n'));
+    writeProjectFile(rootDir, 'destructured.ts', [
+      "import styles from './destructured.module.css';",
+      'declare const primary: boolean;',
+      "const key = primary ? 'primary' : 'root';",
+      "const { root, 'primary': quoted } = styles;",
+      'const { [key]: className } = styles;',
+      'void root;',
+      'void quoted;',
+      'void className;',
+    ].join('\n'));
+
+    assert.deepEqual(findUnusedClasses({ rootDir }), {
+      incomplete: false,
+      unused: [
+        { stylesheet: join(rootDir, 'destructured.module.css'), className: 'unused' },
+        { stylesheet: join(rootDir, 'finite.module.css'), className: 'unused' },
+      ],
+    });
+
+    writeProjectFile(rootDir, 'rest.module.css', '.root {}');
+    writeProjectFile(rootDir, 'rest.ts', [
+      "import styles from './rest.module.css';",
+      'const { ...rest } = styles;',
+      'void rest;',
+    ].join('\n'));
+    const rest = findUnusedClasses({ rootDir, paths: ['rest.ts'] });
+    assert.equal(rest.incomplete, true);
+    assert.match(rest.reason!, /rest\.ts:2:7/);
+    unlinkSync(join(rootDir, 'rest.ts'));
+
+    writeProjectFile(rootDir, 'nested.ts', [
+      "import styles from './rest.module.css';",
+      'const { root: { nested } } = styles;',
+      'void nested;',
+    ].join('\n'));
+    const nested = findUnusedClasses({ rootDir, paths: ['nested.ts'] });
+    assert.equal(nested.incomplete, true);
+    assert.match(nested.reason!, /nested\.ts:2:7/);
+    unlinkSync(join(rootDir, 'nested.ts'));
+
+    writeProjectFile(rootDir, 'numeric.ts', [
+      "import styles from './rest.module.css';",
+      'const { 1: numeric } = styles;',
+      'void numeric;',
+    ].join('\n'));
+    const numeric = findUnusedClasses({ rootDir, paths: ['numeric.ts'] });
+    assert.equal(numeric.incomplete, true);
+    assert.match(numeric.reason!, /numeric\.ts:2:7/);
+    unlinkSync(join(rootDir, 'numeric.ts'));
+
+    writeProjectFile(rootDir, 'missing.ts', [
+      "import styles from './missing.module.css';",
+      'styles.root;',
+    ].join('\n'));
+    const missing = findUnusedClasses({ rootDir, paths: ['missing.ts'] });
+    assert.equal(missing.incomplete, true);
+    assert.match(missing.reason!, /Unable to resolve CSS Module/);
+    unlinkSync(join(rootDir, 'missing.ts'));
+
+    writeProjectFile(rootDir, 'runtime.module.css', '.root {}');
+    writeProjectFile(rootDir, 'runtime.ts', [
+      "import styles from './runtime.module.css';",
+      'declare const key: string;',
+      'styles[key];',
+    ].join('\n'));
+
+    const incomplete = findUnusedClasses({ rootDir });
+    assert.equal(incomplete.incomplete, true);
+    assert.deepEqual(incomplete.unused, []);
+    assert.match(incomplete.reason!, /runtime\.ts:3:1/);
+
+    const output: string[] = [];
+    assert.equal(runCli(['check-unused', '--root', rootDir], (line) => output.push(line)), 2);
+    assert.match(output[0]!, /runtime\.ts:3:1/);
+  });
 });
 
 test('keeps CSS class identity when checking camel-cased properties', () => {
@@ -1745,7 +2093,13 @@ test('scans supported source files conservatively and ignores unsafe paths', () 
     symlinkSync(outside, join(rootDir, 'linked.module.css'));
 
     try {
-      assert.deepEqual(findUnusedClasses({ rootDir }), { incomplete: true, unused: [] });
+      const indeterminate = findUnusedClasses({ rootDir });
+      assert.equal(indeterminate.incomplete, true);
+      assert.deepEqual(indeterminate.unused, []);
+      assert.match(indeterminate.reason!, /dynamic\.js:3:1/);
+      const indirect = findUnusedClasses({ rootDir, paths: ['identifier.mjs'] });
+      assert.equal(indirect.incomplete, true);
+      assert.match(indirect.reason!, /identifier\.mjs:2:9/);
       const selected = findUnusedClasses({
         rootDir,
         paths: ['static.module.css'],
@@ -1895,7 +2249,9 @@ test('reports unknown CSS Module classes in static destructuring', async () => {
     const messages = await lint([
       "import styles from './classes.module.css';",
       'const key = readKey();',
-      "const { root, primary: renamed, ['kebab-case']: kebab, [key]: dynamic, ...rest } = styles;",
+      "const { root, primary: renamed, ['kebab-case']: kebab, [`root`]: templateRoot, [key]: dynamic, ...rest } = styles;",
+      "const finiteKey = condition ? 'root' : 'primrayComputed';",
+      'const { [finiteKey]: finite } = styles;',
       'const { primray } = styles;',
       'let assigned;',
       '({ primray: assigned } = styles);',
@@ -1910,8 +2266,9 @@ test('reports unknown CSS Module classes in static destructuring', async () => {
       'const { missing } = another;',
     ].join('\n'), source, {}, rootDir);
 
-    assert.equal(messages.length, 6);
+    assert.equal(messages.length, 7);
     assert.deepEqual(messages.map((message) => message.messageId), [
+      'unknownClass',
       'unknownClass',
       'unknownClass',
       'unknownClass',
@@ -1922,6 +2279,9 @@ test('reports unknown CSS Module classes in static destructuring', async () => {
     assert.equal(messages.filter((message) => /Unknown CSS Module class "primray"/.test(message.message)).length, 5);
     assert.equal(messages.filter((message) => /Did you mean styles\.primary\?/.test(message.message)).length, 5);
     assert.ok(messages.some((message) => /Unknown CSS Module class "missing"/.test(message.message)));
+    assert.ok(messages.some((message) => /Unknown CSS Module class "primrayComputed"/.test(message.message)));
+    assert.ok(messages.some((message) =>
+      /primrayComputed/.test(message.message) && !/Did you mean/.test(message.message)));
     assert.ok(messages.some((message) => !/Did you mean/.test(message.message)));
   } finally {
     rmSync(temporaryDirectory, { force: true, recursive: true });

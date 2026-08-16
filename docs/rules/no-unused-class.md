@@ -35,6 +35,8 @@ import styles from './Button.module.scss';
 styles.root;                 // dot access
 styles['root'];              // static bracket access
 const { icon } = styles;     // destructuring
+const size = compact ? 'sm' : 'lg';
+styles[`size_${size}`];       // both finite candidates count
 ```
 
 A local `composes` dependency counts too, even with no direct JS reference:
@@ -53,7 +55,7 @@ Anything that makes usage unknowable skips the **whole** stylesheet — not just
 because after it the rule can no longer tell used from unused:
 
 ```js
-styles[iconVariant];   // dynamic access
+styles[iconVariant];   // indeterminate runtime access
 applyTheme(styles);    // the module object passed elsewhere
 ```
 
@@ -67,8 +69,9 @@ Classes inside `:global(...)` are a module's public surface and are never report
 direction.
 
 Because the skip is whole-module, a single report almost never means "the rule missed a use case".
-It means every usage found in that file was static and this class was not among them. The usual
-cause is a class used only from a *different* source file.
+It means every usage found in that file was direct or resolved to a complete finite candidate set,
+and this class was not among them. The usual cause is a class used only from a *different* source
+file.
 
 ## Cross-file `composes`
 
@@ -92,5 +95,7 @@ rules — they share one in-memory cache.
 
 ## When not to use it
 
-Turn it off when a stylesheet is shared between components, when class names are built dynamically,
-or when a design system exposes classes for consumers outside the repository.
+Turn it off when a stylesheet is shared between components, when class names depend on runtime data,
+or when a design system exposes classes for consumers outside the repository. For shared local
+stylesheets, prefer the project-wide CLI; it exits `2` with a source location if any relevant access
+is indeterminate.

@@ -1,4 +1,5 @@
 import styles from './dynamic.module.css';
 
-declare const size: string;
-styles[`size_${size}`];
+declare const compact: boolean;
+const key = compact ? 'one' : 'two';
+styles[key];

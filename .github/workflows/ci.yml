@@ -66,9 +66,17 @@ jobs:
           mkdir consumer && cd consumer
           npm init -y > /dev/null
           npm install --no-audit --no-fund eslint "$RUNNER_TEMP"/eslint-plugin-css-modules-guard-*.tgz
+          npm install --no-audit --no-fund --no-save typescript@4.8.4
           test ! -d node_modules/sass
           test ! -d node_modules/less
           printf "import cssModules from 'eslint-plugin-css-modules-guard';\nexport default [cssModules.configs.recommended];\n" > eslint.config.mjs
-          printf ".root {}\n.primary {}\n" > Button.module.css
-          printf "import styles from './Button.module.css';\nstyles.root;\nstyles.primary;\n" > Button.js
+          printf ".root {}\n.primary {}\n.stale {}\n" > Button.module.css
+          printf "import styles from './Button.module.css';\nconst key = enabled ? 'root' : 'primary';\nstyles[key];\n" > Button.js
           npx eslint Button.js
+          set +e
+          npx css-modules-lint check-unused . > actual.txt
+          status=$?
+          set -e
+          test "$status" -eq 1
+          printf "Button.module.css: stale\n" > expected.txt
+          diff -u expected.txt actual.txt

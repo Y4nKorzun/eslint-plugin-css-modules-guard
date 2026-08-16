@@ -23,7 +23,7 @@ styles.primray;   // Unknown CSS Module class "primray". Did you mean styles.pri
 styles.root;      // ok
 ```
 
-Every static access form is checked:
+Every direct access form is checked:
 
 ```js
 styles.primary;              // dot access
@@ -31,6 +31,21 @@ styles['primary'];           // static bracket access
 styles[`primary`];           // template literal with no expressions
 const { primary } = styles;  // destructuring
 ```
+
+Finite computed keys are checked too, without TypeScript type information:
+
+```js
+const size = compact ? 'sm' : 'lg';
+styles[`size_${size}`];
+
+const tone = 'primary';
+styles[tone];
+```
+
+Supported expressions are string literals, immutable `const` aliases, conditionals, template
+literals, string concatenation, and TypeScript `as const` expressions. Every possible candidate is
+checked. Suggestions remain limited to direct accesses because replacing an entire computed
+expression would be an unsafe edit.
 
 ## What it accepts
 
@@ -42,12 +57,16 @@ const { primary } = styles;  // destructuring
 
 ## What it skips
 
-Dynamic access is deliberately not guessed:
+Runtime access is deliberately not guessed:
 
 ```js
-styles[variant];             // skipped, never reported
-styles[`is-${state}`];       // skipped: the template has an expression
+const variant = readFromApi();
+styles[variant];             // indeterminate, never reported as unknown
+styles[`is-${state.value}`]; // indeterminate: runtime object state
 ```
+
+Mutable bindings, function results, escaped module objects, cycles, and expressions above the
+fixed analysis ceiling are indeterminate. They do not produce speculative errors.
 
 ## Suggestions
 

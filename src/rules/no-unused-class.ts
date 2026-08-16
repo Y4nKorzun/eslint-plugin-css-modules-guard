@@ -4,6 +4,7 @@ import { extractClasses, usedLocalClasses } from '../core/extractor.js';
 import { normalizeOptions } from '../core/options.js';
 import { isCssModuleSpecifier, resolveStylesheet } from '../core/resolver.js';
 import { cssModulesOptionsSchema } from '../core/schema.js';
+import { propertyCandidates } from './candidates.js';
 import { createRule } from './create-rule.js';
 import type { CssModulesOptions, ExtractionResult } from '../core/types.js';
 
@@ -16,32 +17,10 @@ interface ImportedModule {
   stylesheet: string;
 }
 
-type PropertyKey = TSESTree.MemberExpression['property'] | TSESTree.Property['key'];
-
-function staticPropertyName(property: PropertyKey, computed: boolean): string | undefined {
-  if (!computed && property.type === TSESTree.AST_NODE_TYPES.Identifier) {
-    return property.name;
-  }
-
-  if (
-    property.type === TSESTree.AST_NODE_TYPES.Literal &&
-    typeof property.value === 'string'
-  ) {
-    return property.value;
-  }
-
-  if (
-    computed &&
-    property.type === TSESTree.AST_NODE_TYPES.TemplateLiteral &&
-    property.expressions.length === 0
-  ) {
-    return property.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('');
-  }
-
-  return undefined;
-}
-
-function destructuredClassNames(node: TSESTree.Identifier): string[] | undefined {
+function destructuredClassNames(
+  node: TSESTree.Identifier,
+  getScope: Parameters<typeof propertyCandidates>[2],
+): string[] | undefined {
   const parent = node.parent;
   if (
     parent.type !== TSESTree.AST_NODE_TYPES.VariableDeclarator ||
@@ -57,27 +36,30 @@ function destructuredClassNames(node: TSESTree.Identifier): string[] | undefined
       return undefined;
     }
 
-    const className = staticPropertyName(property.key, property.computed);
-    if (!className) {
+    const candidates = propertyCandidates(property.key, property.computed, getScope);
+    if (!candidates) {
       return undefined;
     }
-    classNames.push(className);
+    classNames.push(...candidates);
   }
 
   return classNames;
 }
 
-function referencedClassNames(node: TSESTree.Identifier): string[] | undefined {
+function referencedClassNames(
+  node: TSESTree.Identifier,
+  getScope: Parameters<typeof propertyCandidates>[2],
+): string[] | undefined {
   const parent = node.parent;
   if (
     parent.type === TSESTree.AST_NODE_TYPES.MemberExpression &&
     parent.object === node
   ) {
-    const className = staticPropertyName(parent.property, parent.computed);
-    return className ? [className] : undefined;
+    const candidates = propertyCandidates(parent.property, parent.computed, getScope);
+    return candidates ? [...candidates] : undefined;
   }
 
-  return destructuredClassNames(node);
+  return destructuredClassNames(node, getScope);
 }
 
 export const noUnusedClass = createRule<Options, MessageIds>({
@@ -164,7 +146,10 @@ export const noUnusedClass = createRule<Options, MessageIds>({
             }
 
             for (const reference of variable.references) {
-              const classNames = referencedClassNames(reference.identifier as TSESTree.Identifier);
+              const classNames = referencedClassNames(
+                reference.identifier as TSESTree.Identifier,
+                (candidate) => context.sourceCode.getScope(candidate),
+              );
               if (!classNames) {
                 usageIsDynamic = true;
                 break;

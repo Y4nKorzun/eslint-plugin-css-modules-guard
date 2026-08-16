@@ -53,36 +53,45 @@ import cssModules from 'eslint-plugin-css-modules-guard';
 export default [cssModules.configs.recommended];
 ```
 
-Now a typo is caught where it happens:
+Now even a computed typo is caught where it happens:
 
-```scss
-/* Button.module.scss */
-.root {}
+```css
+/* Button.module.css */
 .primary {}
+.danger {}
+.legacy {}
 ```
 
 ```js
 // Button.js
-import styles from './Button.module.scss';
+import styles from './Button.module.css';
 
-styles.primray;
+export function buttonClass(destructive) {
+  const tone = destructive ? 'danger' : 'primray';
+  return styles[tone];
+}
 ```
 
 ```text
-Unknown CSS Module class "primray" in "./Button.module.scss". Did you mean styles.primary?
+Unknown CSS Module class "primray" in "./Button.module.css".
 ```
 
-ESLint exposes that correction as a suggestion; the plugin never changes source code automatically.
+Correct `primray` to `primary` and the opt-in unused rule can safely report `legacy`: both possible
+computed keys are now accounted for. Direct typos such as `styles.primray` still receive an ESLint
+suggestion; the plugin never changes source code automatically.
 
 ## What the recommended config checks
 
 | Rule | Included | What it catches |
 | --- | --- | --- |
-| [`css-modules/no-unknown-class`](docs/rules/no-unknown-class.md) | Yes | Static dot, bracket, template-literal, and destructured names that do not exist in the module |
+| [`css-modules/no-unknown-class`](docs/rules/no-unknown-class.md) | Yes | Direct and finite computed class names that do not exist in the module |
 | [`css-modules/unresolvable-stylesheet`](docs/rules/unresolvable-stylesheet.md) | Yes | A CSS Module import that is missing, outside the project, unsafe, cannot compile, or needs a compiler that is not installed |
 | [`css-modules/no-unused-class`](docs/rules/no-unused-class.md) | No | Local classes unused by one source file; enable only when that ownership rule is true |
 
-`no-unknown-class` also accepts ICSS `:export` values, classes composed from local modules, and classes declared inside `:global()`. Dynamic access such as `styles[variant]` is deliberately skipped rather than guessed.
+`no-unknown-class` also accepts ICSS `:export` values, classes composed from local modules, and
+classes declared inside `:global()`. It resolves string literals, immutable `const` aliases,
+conditionals, templates, concatenation, and TypeScript `as const` expressions. Runtime values such
+as an API response are deliberately left indeterminate rather than guessed.
 
 ## Configure the rules
 
@@ -228,7 +237,9 @@ export default [
 ];
 ```
 
-Static dot access, static bracket access, and object destructuring count as use. Local `composes` dependencies count as use too. Dynamic access, passing the module object elsewhere, or Sass `@extend` makes the rule skip that module instead of issuing a risky false positive.
+Direct access, finite computed access, and object destructuring count as use. Local `composes`
+dependencies count as use too. An indeterminate runtime access, passing the module object elsewhere,
+or Sass `@extend` makes the rule skip that module instead of issuing a risky false positive.
 
 When the rule skips a module, it skips it entirely — no classes from that stylesheet are reported, even ones that really are unused, because the rule can no longer tell:
 
@@ -237,7 +248,7 @@ import styles from './Button.module.scss';
 
 styles.root;               // counted as use
 const { icon } = styles;   // counted as use
-styles[iconVariant];       // dynamic: the whole module is skipped, not just this line
+styles[iconVariant];       // runtime string: the whole module is skipped, not just this line
 applyTheme(styles);        // passed elsewhere: the whole module is skipped too
 ```
 
@@ -282,10 +293,11 @@ It exits with:
 | `1` | Unused classes found |
 | `2` | The scan was incomplete or its input was invalid; no clean result is claimed |
 
-The CLI parses source files with the optional `typescript` peer dependency. Without it every class
-would look unused, so the scan exits `2` and says why instead of reporting false positives. When
-the cause can be named it is printed, and `--format json` carries it in a `reason` field that
-appears only in that case.
+The CLI parses source files with the optional `typescript` peer dependency. It follows local symbols
+to resolve the same immutable candidate sets across every importer. If a key comes from runtime data,
+the module object escapes, an import cannot be resolved, or TypeScript is unavailable, the scan exits
+`2` and says why instead of reporting false positives. `--format json` carries the explanation in a
+`reason` field when the cause can be named.
 
 Use JSON in CI or pass the same alias and Sass settings when needed:
 
@@ -326,8 +338,8 @@ The TypeScript plugin improves editor experience, but it does not run during `ts
 
 | `eslint-plugin-css-modules` | This package | Notes |
 | --- | --- | --- |
-| `css-modules/no-undef-class` | `css-modules/no-unknown-class` | Also understands destructuring and template literals, and offers typo suggestions |
-| `css-modules/no-unused-class` | `css-modules/no-unused-class` | Same intent; opt-in here because it assumes one file owns the module |
+| `css-modules/no-undef-class` | `css-modules/no-unknown-class` | Also checks finite computed keys and offers suggestions for direct typos |
+| `css-modules/no-unused-class` | `css-modules/no-unused-class` | Finite computed keys count as use; still opt-in because it assumes one file owns the module |
 | `{ camelCase: true }` rule option | `localsConvention: 'camelCase'` plugin option | Shared across every enabled rule instead of set per rule |
 | `settings['css-modules'].basePath` | `aliases` / automatic `tsconfig.json` reading | No global base path; aliases are explicit or derived from `compilerOptions.paths` |
 | `.eslintrc` `plugins` + `extends` | flat config `cssModules.configs.recommended` | See [Quick start](#quick-start) |
@@ -337,7 +349,8 @@ To migrate: remove `eslint-plugin-css-modules` and its `.eslintrc` entries, inst
 ## Scope and safety
 
 - Checks default imports ending in `.module.css`, `.module.scss`, `.module.sass`, or `.module.less`.
-- Does not attempt to infer dynamic property names or inspect CSS-in-JS.
+- Resolves only finite local string expressions; it does not guess arbitrary runtime property names
+  or inspect CSS-in-JS.
 - Reads regular local files only; performs no writes, subprocess execution, `eval`, or configuration execution.
 - Parses `tsconfig.json` as data and uses local-only Sass and Less file resolution.
 - Refuses Less `@plugin` directives and inline JavaScript, so a stylesheet cannot run code.

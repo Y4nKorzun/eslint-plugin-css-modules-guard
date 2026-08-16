@@ -4,6 +4,7 @@ import { extractClasses } from '../core/extractor.js';
 import { normalizeOptions } from '../core/options.js';
 import { isCssModuleSpecifier, resolveStylesheet } from '../core/resolver.js';
 import { cssModulesOptionsSchema } from '../core/schema.js';
+import { propertyCandidates } from './candidates.js';
 import { createRule } from './create-rule.js';
 import type { CssModulesOptions, ExtractionResult } from '../core/types.js';
 
@@ -17,29 +18,6 @@ interface ImportedModule {
 }
 
 type PropertyKey = TSESTree.MemberExpression['property'] | TSESTree.Property['key'];
-
-function staticPropertyName(property: PropertyKey, computed: boolean): string | undefined {
-  if (!computed && property.type === TSESTree.AST_NODE_TYPES.Identifier) {
-    return property.name;
-  }
-
-  if (
-    property.type === TSESTree.AST_NODE_TYPES.Literal &&
-    typeof property.value === 'string'
-  ) {
-    return property.value;
-  }
-
-  if (
-    computed &&
-    property.type === TSESTree.AST_NODE_TYPES.TemplateLiteral &&
-    property.expressions.length === 0
-  ) {
-    return property.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('');
-  }
-
-  return undefined;
-}
 
 function isDirectFunctionParameter(node: TSESTree.AssignmentPattern): boolean {
   const parent = node.parent;
@@ -146,6 +124,13 @@ function suggestedAccess(binding: string, className: string): string {
     : `${binding}[${JSON.stringify(className)}]`;
 }
 
+function canSuggestProperty(property: PropertyKey, computed: boolean): boolean {
+  return !computed ||
+    property.type === TSESTree.AST_NODE_TYPES.Literal ||
+    (property.type === TSESTree.AST_NODE_TYPES.TemplateLiteral &&
+      property.expressions.length === 0);
+}
+
 export const noUnknownClass = createRule<Options, MessageIds>({
   name: 'no-unknown-class',
   meta: {
@@ -219,37 +204,50 @@ export const noUnknownClass = createRule<Options, MessageIds>({
         }
 
         const imported = importedModules.get(node.object.name);
-        const className = staticPropertyName(node.property, node.computed);
-        if (!imported || !className || !hasImportedBinding(node, imported)) {
+        if (!imported || !hasImportedBinding(node, imported)) {
           return;
         }
 
-        if (imported.classes.classes.has(className)) {
+        const candidates = propertyCandidates(
+          node.property,
+          node.computed,
+          (candidate) => context.sourceCode.getScope(candidate),
+        );
+        if (!candidates) {
           return;
         }
 
-        const suggestedClass = nearestMatch(className, imported.classes.classes, options.suggestThreshold);
-        const suggested = suggestedClass && suggestedAccess(imported.binding.name, suggestedClass);
-        context.report({
-          node,
-          messageId: 'unknownClass',
-          data: {
-            className,
-            stylesheet: imported.stylesheet,
-            suggestion: suggested
-              ? ` Did you mean ${suggested}?`
-              : '',
-          },
-          suggest: suggested
-            ? [{
-                messageId: 'suggestedClass',
-                data: { suggestion: suggested },
-                fix(fixer) {
-                  return fixer.replaceText(node, suggested);
-                },
-              }]
-            : null,
-        });
+        const canSuggest = canSuggestProperty(node.property, node.computed);
+
+        for (const className of candidates) {
+          if (imported.classes.classes.has(className)) {
+            continue;
+          }
+
+          const suggestedClass = canSuggest &&
+            nearestMatch(className, imported.classes.classes, options.suggestThreshold);
+          const suggested = suggestedClass && suggestedAccess(imported.binding.name, suggestedClass);
+          context.report({
+            node,
+            messageId: 'unknownClass',
+            data: {
+              className,
+              stylesheet: imported.stylesheet,
+              suggestion: suggested
+                ? ` Did you mean ${suggested}?`
+                : '',
+            },
+            suggest: suggested
+              ? [{
+                  messageId: 'suggestedClass',
+                  data: { suggestion: suggested },
+                  fix(fixer) {
+                    return fixer.replaceText(node, suggested);
+                  },
+                }]
+              : null,
+          });
+        }
       },
       ObjectPattern(node) {
         const source = objectPatternSource(node);
@@ -263,24 +261,39 @@ export const noUnknownClass = createRule<Options, MessageIds>({
             continue;
           }
 
-          const className = staticPropertyName(property.key, property.computed);
-          if (!className || imported.classes.classes.has(className)) {
+          const candidates = propertyCandidates(
+            property.key,
+            property.computed,
+            (candidate) => context.sourceCode.getScope(candidate),
+          );
+          if (!candidates) {
             continue;
           }
 
-          const suggestedClass = nearestMatch(className, imported.classes.classes, options.suggestThreshold);
-          const suggested = suggestedClass && suggestedAccess(imported.binding.name, suggestedClass);
-          context.report({
-            node: property,
-            messageId: 'unknownClass',
-            data: {
+          const canSuggest = canSuggestProperty(property.key, property.computed);
+          for (const className of candidates) {
+            if (imported.classes.classes.has(className)) {
+              continue;
+            }
+
+            const suggestedClass = canSuggest && nearestMatch(
               className,
-              stylesheet: imported.stylesheet,
-              suggestion: suggested
-                ? ` Did you mean ${suggested}?`
-                : '',
-            },
-          });
+              imported.classes.classes,
+              options.suggestThreshold,
+            );
+            const suggested = suggestedClass && suggestedAccess(imported.binding.name, suggestedClass);
+            context.report({
+              node: property,
+              messageId: 'unknownClass',
+              data: {
+                className,
+                stylesheet: imported.stylesheet,
+                suggestion: suggested
+                  ? ` Did you mean ${suggested}?`
+                  : '',
+              },
+            });
+          }
         }
       },
     };

@@ -28,7 +28,7 @@ interface CssModulesPlugin {
 const plugin: CssModulesPlugin = {
   meta: {
     name: 'eslint-plugin-css-modules-guard',
-    version: '1.0.0',
+    version: '2.0.0',
   },
   rules: {
     'no-unknown-class': noUnknownClass,

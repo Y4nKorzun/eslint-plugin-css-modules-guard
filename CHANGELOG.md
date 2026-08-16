@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-16
+
+### Added
+
+- `no-unknown-class` and `no-unused-class` resolve finite computed class keys from string literals,
+  immutable `const` aliases, conditionals, template literals, concatenation, and TypeScript
+  assertions such as `as const`. No type-aware parser configuration is required.
+- `css-modules-lint check-unused` performs the same bounded analysis through TypeScript symbols,
+  including finite computed destructuring, across every scanned importer.
+- The CLI names the first indeterminate source location or unresolved CSS Module import in its
+  incomplete result.
+
+### Changed
+
+- **Breaking.** `no-unknown-class` now reports missing candidates in expressions that 1.0 skipped,
+  including `const key = condition ? 'root' : 'primray'; styles[key]`.
+- **Breaking.** The project-wide CLI now exits `2` when a CSS Module key depends on runtime data or
+  the module object escapes. Version 1.0 treated every class in that module as used and could return
+  a misleading clean result.
+- Computed expressions that cannot be proven finite remain indeterminate. `no-unused-class` keeps
+  its whole-module skip, while the project-wide CLI refuses to claim a complete scan.
+
+### Fixed
+
+- Project-wide unused analysis now follows TypeScript symbols instead of matching import names as
+  plain text, so a shadowed local identifier cannot be mistaken for use of the imported module.
+
 ## [1.0.0] - 2026-08-13
 
 First stable release. Rule behavior, plugin options, and CLI exit codes are now covered by semantic
@@ -210,7 +237,8 @@ stylesheets. Install `less` or exclude those paths.
 - Initial release: `css-modules/no-unknown-class` and `css-modules/unresolvable-stylesheet` rules
   for ESLint 9 flat config, reading local `.module.css`, `.module.scss`, and `.module.sass` files.
 
-[Unreleased]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/Y4nKorzun/eslint-plugin-css-modules-guard/compare/v0.8.1...v0.8.2

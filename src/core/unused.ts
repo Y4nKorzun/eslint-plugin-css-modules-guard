@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type ts from 'typescript';
@@ -6,6 +6,7 @@ import type ts from 'typescript';
 import { extractClasses, usedLocalClasses } from './extractor.js';
 import { normalizeOptions } from './options.js';
 import { isCssModuleSpecifier, isInsideOrEqual, resolveStylesheet } from './resolver.js';
+import { typescriptExpressionCandidates } from './typescript-candidates.js';
 import { loadTypeScript } from './typescript-loader.js';
 import type { TypeScriptModule } from './typescript-loader.js';
 import type { CssModulesOptions, ExtractorOptions } from './types.js';
@@ -28,7 +29,6 @@ export interface UnusedClassesResult {
 }
 
 interface Usage {
-  all: boolean;
   classes: Set<string>;
 }
 
@@ -36,6 +36,8 @@ interface ImportedBinding {
   binding: ts.Identifier;
   stylesheet: string;
 }
+
+type SourceScanResult = { complete: true } | { complete: false; reason: string };
 
 interface FileCollection {
   files: string[];
@@ -112,70 +114,52 @@ function collectFiles(
   return { files: [...new Set(files)].sort(), incomplete };
 }
 
-function scriptKind(typescript: TypeScriptModule, filePath: string): ts.ScriptKind {
-  switch (extname(filePath).toLowerCase()) {
-    case '.tsx':
-      return typescript.ScriptKind.TSX;
-    case '.jsx':
-      return typescript.ScriptKind.JSX;
-    case '.js':
-    case '.mjs':
-    case '.cjs':
-      return typescript.ScriptKind.JS;
-    default:
-      return typescript.ScriptKind.TS;
-  }
-}
-
 function usageFor(usages: Map<string, Usage>, stylesheet: string): Usage {
   const existing = usages.get(stylesheet);
   if (existing) {
     return existing;
   }
 
-  const created = { all: false, classes: new Set<string>() };
+  const created = { classes: new Set<string>() };
   usages.set(stylesheet, created);
   return created;
 }
 
-function staticElementName(
+function indeterminateReason(
+  source: ts.SourceFile,
+  node: ts.Node,
+  rootDir: string,
+): string {
+  const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
+  return `Cannot determine CSS Module class access in "${relative(rootDir, source.fileName)}:${line + 1}:${character + 1}".`;
+}
+
+function bindingElementCandidates(
   typescript: TypeScriptModule,
-  node: ts.ElementAccessExpression,
-): string | undefined {
-  const argument = node.argumentExpression;
-  return argument &&
-    (typescript.isStringLiteral(argument) || typescript.isNoSubstitutionTemplateLiteral(argument))
-    ? argument.text
+  checker: ts.TypeChecker,
+  element: ts.BindingElement,
+): ReadonlySet<string> | undefined {
+  if (element.dotDotDotToken || !typescript.isIdentifier(element.name)) {
+    return undefined;
+  }
+
+  const property = element.propertyName ?? element.name;
+  if (typescript.isIdentifier(property) || typescript.isStringLiteral(property)) {
+    return new Set([property.text]);
+  }
+  return typescript.isComputedPropertyName(property)
+    ? typescriptExpressionCandidates(typescript, checker, property.expression)
     : undefined;
 }
 
 function scanSourceFile(
   typescript: TypeScriptModule,
-  filePath: string,
+  checker: ts.TypeChecker,
+  source: ts.SourceFile,
   options: ExtractorOptions,
   usages: Map<string, Usage>,
-): boolean {
-  let sourceText: string;
-  try {
-    sourceText = readFileSync(filePath, 'utf8');
-  } catch {
-    return false;
-  }
-
-  const source = typescript.createSourceFile(
-    filePath,
-    sourceText,
-    typescript.ScriptTarget.Latest,
-    true,
-    scriptKind(typescript, filePath),
-  );
-  const diagnostics = (source as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] })
-    .parseDiagnostics;
-  if (diagnostics && diagnostics.length > 0) {
-    return false;
-  }
-
-  const imports = new Map<string, ImportedBinding>();
+): SourceScanResult {
+  const imports = new Map<ts.Symbol, ImportedBinding>();
   for (const statement of source.statements) {
     if (
       !typescript.isImportDeclaration(statement) ||
@@ -190,18 +174,53 @@ function scanSourceFile(
       continue;
     }
 
-    const stylesheet = resolveStylesheet(filePath, specifier, options);
-    if (stylesheet) {
-      imports.set(defaultBinding.text, { binding: defaultBinding, stylesheet: stylesheet.path });
+    const stylesheet = resolveStylesheet(source.fileName, specifier, options);
+    if (!stylesheet) {
+      return {
+        complete: false,
+        reason: `Unable to resolve CSS Module "${specifier}" imported by "${relative(options.rootDir, source.fileName)}".`,
+      };
     }
+    const symbol = checker.getSymbolAtLocation(defaultBinding)!;
+    imports.set(symbol, { binding: defaultBinding, stylesheet: stylesheet.path });
   }
 
+  const importedFor = (node: ts.Identifier): ImportedBinding | undefined => {
+    const symbol = checker.getSymbolAtLocation(node);
+    return symbol ? imports.get(symbol) : undefined;
+  };
+
+  let reason: string | undefined;
   const visit = (node: ts.Node): void => {
+    if (reason) {
+      return;
+    }
+
     if (
+      typescript.isVariableDeclaration(node) &&
+      node.initializer &&
+      typescript.isIdentifier(node.initializer) &&
+      typescript.isObjectBindingPattern(node.name)
+    ) {
+      const imported = importedFor(node.initializer);
+      if (imported) {
+        const usage = usageFor(usages, imported.stylesheet);
+        for (const element of node.name.elements) {
+          const candidates = bindingElementCandidates(typescript, checker, element);
+          if (!candidates) {
+            reason = indeterminateReason(source, node, options.rootDir);
+            break;
+          }
+          for (const className of candidates) {
+            usage.classes.add(className);
+          }
+        }
+      }
+    } else if (
       typescript.isPropertyAccessExpression(node) &&
       typescript.isIdentifier(node.expression)
     ) {
-      const imported = imports.get(node.expression.text);
+      const imported = importedFor(node.expression);
       if (imported) {
         usageFor(usages, imported.stylesheet).classes.add(node.name.text);
       }
@@ -209,26 +228,35 @@ function scanSourceFile(
       typescript.isElementAccessExpression(node) &&
       typescript.isIdentifier(node.expression)
     ) {
-      const imported = imports.get(node.expression.text);
+      const imported = importedFor(node.expression);
       if (imported) {
-        const className = staticElementName(typescript, node);
-        const usage = usageFor(usages, imported.stylesheet);
-        if (className) {
-          usage.classes.add(className);
+        const candidates = typescriptExpressionCandidates(
+          typescript,
+          checker,
+          node.argumentExpression!,
+        );
+        if (!candidates) {
+          reason = indeterminateReason(source, node, options.rootDir);
         } else {
-          usage.all = true;
+          const usage = usageFor(usages, imported.stylesheet);
+          for (const className of candidates) {
+            usage.classes.add(className);
+          }
         }
       }
     } else if (typescript.isIdentifier(node)) {
-      const imported = imports.get(node.text);
+      const imported = importedFor(node);
       if (imported && node !== imported.binding) {
         const parent = node.parent;
         const isPropertyObject = typescript.isPropertyAccessExpression(parent) &&
           parent.expression === node;
         const isElementObject = typescript.isElementAccessExpression(parent) &&
           parent.expression === node;
-        if (!isPropertyObject && !isElementObject) {
-          usageFor(usages, imported.stylesheet).all = true;
+        const isDestructuringSource = typescript.isVariableDeclaration(parent) &&
+          parent.initializer === node &&
+          typescript.isObjectBindingPattern(parent.name);
+        if (!isPropertyObject && !isElementObject && !isDestructuringSource) {
+          reason = indeterminateReason(source, node, options.rootDir);
         }
       }
     }
@@ -237,7 +265,7 @@ function scanSourceFile(
   };
 
   visit(source);
-  return true;
+  return reason ? { complete: false, reason } : { complete: true };
 }
 
 export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResult {
@@ -258,17 +286,36 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResul
   const collection = collectFiles(rootDir, paths);
   const { files } = collection;
   const stylesheets = files.filter(isCssModuleSpecifier);
+  const sourceFiles = files.filter(isSourceFile);
   const usages = new Map<string, Usage>();
-  let scanWasIncomplete = collection.incomplete;
-
-  for (const filePath of files) {
-    if (isSourceFile(filePath) && !scanSourceFile(typescript, filePath, options, usages)) {
-      scanWasIncomplete = true;
-    }
+  if (collection.incomplete) {
+    return { incomplete: true, unused: [] };
   }
 
-  if (scanWasIncomplete) {
-    return { incomplete: true, unused: [] };
+  const program = typescript.createProgram({
+    rootNames: sourceFiles,
+    options: {
+      allowJs: true,
+      checkJs: false,
+      jsx: typescript.JsxEmit.Preserve,
+      noEmit: true,
+      noLib: true,
+      noResolve: true,
+      skipLibCheck: true,
+      target: typescript.ScriptTarget.Latest,
+    },
+  });
+
+  const checker = program.getTypeChecker();
+  for (const filePath of sourceFiles) {
+    const source = program.getSourceFile(filePath);
+    if (!source || program.getSyntacticDiagnostics(source).length > 0) {
+      return { incomplete: true, unused: [] };
+    }
+    const result = scanSourceFile(typescript, checker, source, options, usages);
+    if (!result.complete) {
+      return { incomplete: true, unused: [], reason: result.reason };
+    }
   }
 
   const unused: UnusedClass[] = [];
@@ -279,9 +326,6 @@ export function findUnusedClasses(input: UnusedCheckOptions): UnusedClassesResul
     }
 
     const usage = usages.get(stylesheet);
-    if (usage?.all) {
-      continue;
-    }
     if (extracted.hasExtend) {
       return { incomplete: true, unused: [] };
     }
